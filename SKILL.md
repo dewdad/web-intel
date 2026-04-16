@@ -12,6 +12,7 @@ allowed-tools:
   - Bash(docker:*)
   - Bash(docker-compose:*)
   - Bash(curl:*)
+  - Bash(*/web-intel:*)
   - Read
   - Write
   - Grep
@@ -20,7 +21,6 @@ metadata:
   requires:
     bins:
       - python3
-      - docker
     python:
       - httpx[http2]
       - httpx-retries
@@ -39,88 +39,117 @@ metadata:
 
 # Web Intel
 
-> **Rate-limit all requests.** Max 5 concurrent fetches per domain. SearXNG has built-in limiting — don't bypass it.
+> **Rate-limit all requests.** Max 5 concurrent fetches per domain.
 
-> **Respect robots.txt.** Trafilatura and Crawl4AI handle this. For raw httpx, check robots.txt first.
+> **JSON output only.** All commands emit JSON to stdout, logs to stderr.
 
-> **JSON output only.** All commands emit JSON to stdout, logs to stderr. Never mix.
+## Path Resolution
 
-> **Secrets in `.env` only.** Never hardcode credentials. The `.env` file is gitignored.
-
-## Quick Start
+All commands use the wrapper script or resolve the skill directory:
 
 ```bash
-docker compose -f docker/docker-compose.searxng.yml up -d   # SearXNG for search
-cp .env.example .env                                         # configure
-python3 scripts/web.py search "query"                        # run (deps auto-install)
+# Preferred: wrapper script (works from any CWD)
+$SKILL_DIR/bin/web-intel <command> [OPTIONS]
+
+# Alternative: direct python call
+python3 $SKILL_DIR/scripts/web.py <command> [OPTIONS]
 ```
+
+`$SKILL_DIR` is the skill's install directory (e.g., `~/.config/opencode/skills/web-intel`).
+
+## Plug-and-Play Setup
+
+**Tier 1 — Zero setup (works immediately):** `fetch`, `extract`, `discover`, `scrape`
+Python deps auto-install on first run. No Docker needed.
+
+```bash
+$SKILL_DIR/bin/web-intel fetch "https://example.com" --pretty
+```
+
+**Tier 2 — Needs SearXNG Docker:** `search`
+
+```bash
+$SKILL_DIR/bin/web-intel setup --pretty           # auto-starts SearXNG
+$SKILL_DIR/bin/web-intel search "query" --pretty
+```
+
+**Tier 3 — Needs Crawl4AI browser:** `crawl`, `fetch` fallback
+
+```bash
+$SKILL_DIR/bin/web-intel setup --tier all --pretty # installs everything
+$SKILL_DIR/bin/web-intel crawl "https://spa.example.com" --pretty
+```
+
+## Diagnostic Commands
+
+```bash
+$SKILL_DIR/bin/web-intel doctor --pretty   # check all deps and services
+$SKILL_DIR/bin/web-intel setup --pretty    # auto-fix: install deps, start SearXNG, create .env
+$SKILL_DIR/bin/web-intel setup --tier all  # full setup including Crawl4AI browser
+```
+
+`doctor` returns JSON with `ready_commands` listing which commands work right now.
 
 ## Commands
 
-All commands: `python3 scripts/web.py {command} [OPTIONS]`. Use `--pretty` for formatted output.
-
-### `search` — Web search via SearXNG
+### `search` — Web search via SearXNG (requires Docker)
 
 ```bash
-python3 scripts/web.py search "query" [--engines google,brave] [--categories general] [--language en] [--time-range week] [--max-results 10] [--pageno 1]
+$SKILL_DIR/bin/web-intel search "query" [--engines google,brave] [--categories general] [--language en] [--time-range week] [--max-results 10]
 ```
 
 ### `fetch` — Fast static page fetch + extraction
 
 ```bash
-python3 scripts/web.py fetch URL [--include-tables] [--include-links] [--include-images] [--favor-precision|--favor-recall] [--output-format markdown] [--no-fallback-crawl] [--timeout 30]
+$SKILL_DIR/bin/web-intel fetch URL [--include-tables] [--include-links] [--include-images] [--favor-precision|--favor-recall] [--output-format markdown] [--no-fallback-crawl] [--timeout 30]
 ```
 
 httpx fetches, Trafilatura extracts. Falls back to Crawl4AI if content is empty/JS-required.
 
-### `crawl` — Dynamic/JS page crawl (browser)
+### `crawl` — Dynamic/JS page crawl (browser, requires Crawl4AI)
 
 ```bash
-python3 scripts/web.py crawl URL [--wait-for CSS_SELECTOR] [--execute-js CODE] [--screenshot] [--pdf] [--timeout 60] [--no-headless] [--docker]
+$SKILL_DIR/bin/web-intel crawl URL [--wait-for CSS_SELECTOR] [--execute-js CODE] [--screenshot] [--pdf] [--timeout 60] [--docker]
 ```
-
-Use for SPAs, JS-heavy pages, pages behind cookie banners.
 
 ### `scrape` — Structured data extraction (CSS selectors)
 
 ```bash
-python3 scripts/web.py scrape URL --selector CSS [--attribute href] [--use-crawl4ai]
-python3 scripts/web.py scrape URL --table [--use-crawl4ai]
-python3 scripts/web.py scrape URL --list [--use-crawl4ai]
+$SKILL_DIR/bin/web-intel scrape URL --selector CSS [--attribute href] [--use-crawl4ai]
+$SKILL_DIR/bin/web-intel scrape URL --table [--use-crawl4ai]
+$SKILL_DIR/bin/web-intel scrape URL --list
 ```
 
 ### `extract` — Content extraction from local HTML (no network)
 
 ```bash
-python3 scripts/web.py extract --html-file PATH [--url URL] [--include-tables] [--include-links] [--output-format markdown]
-echo "<html>..." | python3 scripts/web.py extract --stdin
+$SKILL_DIR/bin/web-intel extract --html-file PATH [--url URL] [--include-tables] [--output-format markdown]
+echo "<html>..." | $SKILL_DIR/bin/web-intel extract --stdin
 ```
 
 ### `discover` — Site URL discovery
 
 ```bash
-python3 scripts/web.py discover URL [--mode sitemap|crawl|both] [--max-urls 100] [--language en]
+$SKILL_DIR/bin/web-intel discover URL [--mode sitemap|crawl|both] [--max-urls 100]
 ```
 
 ## Routing Guide
 
-| Task | Command | Why |
-|------|---------|-----|
-| Research a topic | `search` | Aggregates multiple engines via SearXNG |
-| Read article/blog/docs | `fetch` | Fast httpx + clean Trafilatura extraction |
-| JS-heavy SPA / login page | `crawl` | Renders JavaScript via Crawl4AI browser |
-| Extract data table (static) | `scrape --table` | BS4 preserves table structure |
-| Extract data table (JS page) | `scrape --table --use-crawl4ai` | Render first, then BS4 |
-| Extract specific elements | `scrape --selector ".class"` | CSS targeting via BS4 |
-| Process local HTML | `extract --html-file` | No network, Trafilatura only |
-| Find all pages on a site | `discover --mode sitemap` | Fast sitemap.xml parsing |
-| Deep site exploration | `discover --mode crawl` | Follows links from homepage |
+| Task | Command | Tier | Why |
+|------|---------|------|-----|
+| Research a topic | `search` | 2 | Aggregates search engines via SearXNG |
+| Read article/blog/docs | `fetch` | 1 | Fast httpx + clean Trafilatura extraction |
+| JS-heavy SPA / login page | `crawl` | 3 | Renders JavaScript via browser |
+| Extract data table (static) | `scrape --table` | 1 | BS4 preserves table structure |
+| Extract data table (JS page) | `scrape --table --use-crawl4ai` | 3 | Render first, then BS4 |
+| Extract specific elements | `scrape --selector` | 1 | CSS targeting via BS4 |
+| Process local HTML | `extract --html-file` | 1 | No network, Trafilatura only |
+| Find all pages on a site | `discover --mode sitemap` | 1 | Fast sitemap.xml parsing |
 
 ## Fallback Chain
 
 ```
 fetch: httpx+Trafilatura ─[empty/JS]─> Crawl4AI+Trafilatura ─[fail]─> error
-crawl: Crawl4AI ─[fail]─> error with diagnostic
 scrape: httpx+BS4 ─[empty/JS]─> Crawl4AI+BS4 ─[fail]─> error
 search: SearXNG ─[fail]─> error with setup hint
 ```
@@ -133,6 +162,8 @@ Every command returns JSON with `status` (`ok`|`partial`|`failed`), `command`, `
 - **scrape**: above + `tables` (3D array) or selector results
 - **search**: `query`, `results[]` (url, title, snippet, engine, score), `total_results`
 - **discover**: `base_url`, `mode`, `urls[]`, `total_urls`
+- **doctor**: `ready_commands[]`, `checks[]` with status/hint per dependency
+- **setup**: `steps[]` with status per action taken
 
 Full schema: `references/output-schema.md`
 
@@ -143,10 +174,8 @@ Full schema: `references/output-schema.md`
 | `SEARXNG_URL` | `http://localhost:8080` | SearXNG instance URL |
 | `SEARXNG_API_KEY` | (none) | Optional SearXNG API key |
 | `CRAWL4AI_DOCKER_URL` | `http://localhost:11235` | Crawl4AI Docker server URL |
-| `CRAWL4AI_API_KEY` | (none) | Optional Crawl4AI API key |
 | `HTTP_TIMEOUT` | `30` | Default HTTP timeout (seconds) |
 | `MAX_CONCURRENT_FETCHES` | `5` | Max parallel fetches per domain |
-| `USER_AGENT` | (auto) | Custom User-Agent string |
 
 ## References
 
