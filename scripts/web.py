@@ -306,9 +306,15 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     # 7. Crawl4AI browser
     crawl4ai_browser_ok = False
     try:
-        playwright_path = Path.home() / ".cache" / "ms-playwright"
-        if playwright_path.exists() and any(playwright_path.iterdir()):
-            crawl4ai_browser_ok = True
+        playwright_paths = [
+            Path.home() / ".cache" / "ms-playwright",           # Linux
+            Path.home() / "Library" / "Caches" / "ms-playwright",  # macOS
+            Path.home() / "AppData" / "Local" / "ms-playwright",    # Windows
+        ]
+        for playwright_path in playwright_paths:
+            if playwright_path.exists() and any(playwright_path.iterdir()):
+                crawl4ai_browser_ok = True
+                break
     except Exception:
         pass
     if not crawl4ai_browser_ok:
