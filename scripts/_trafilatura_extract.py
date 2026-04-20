@@ -172,11 +172,11 @@ def discover_sitemap(
     target_lang: Optional[str] = None,
     max_urls: int = 100,
 ) -> DiscoverResult:
-    import trafilatura
+    from trafilatura.sitemaps import sitemap_search
 
     with Timer() as t:
         try:
-            urls = trafilatura.sitemap_search(url, target_lang=target_lang) or []
+            urls = sitemap_search(url, target_lang=target_lang) or []
             urls = urls[:max_urls]
         except Exception as exc:
             log.error("Sitemap discovery failed for %s: %s", url, exc)
@@ -203,11 +203,11 @@ def discover_crawl(
     max_urls: int = 100,
     language: Optional[str] = None,
 ) -> DiscoverResult:
-    import trafilatura
+    from trafilatura.spider import focused_crawler
 
     with Timer() as t:
         try:
-            known, _visited = trafilatura.focused_crawler(
+            known, _visited = focused_crawler(
                 url,
                 max_seen_urls=max_urls,
                 max_known_urls=max_urls * 5,
