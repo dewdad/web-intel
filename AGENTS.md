@@ -10,7 +10,7 @@ skillshare install dewdad/web-intel --track && skillshare sync
 The skill is designed to work immediately when copied into a skills folder. Three tiers:
 - **Tier 1 (zero setup)**: `fetch`, `extract`, `discover`, `scrape` — Python deps auto-install on first run
 
-- **Tier 2 (needs Docker)**: `search` — requires SearXNG container, auto-started via `setup`
+- **Tier 2 (needs Docker)**: `search` — SearXNG container auto-started via `setup`. Falls back to [ddgs](https://github.com/deedy5/ddgs) (zero-config) or Brave Search API if Docker is unavailable.
 
 - **Tier 3 (needs browser)**: `crawl` — requires Crawl4AI browser, installed via `setup --tier all`
 
@@ -28,7 +28,7 @@ All output is JSON on stdout. Logs go to stderr only. **Never print non-JSON to 
 ## Architecture (what isn't obvious from filenames)
 - `web.py` inserts `scripts/` into `sys.path`. All `_*.py` sibling imports resolve at runtime, not via packages. **Pyright will flag these as **`reportMissingImports`** — ignore them.**
 
-- External library imports (`httpx`, `trafilatura`, `bs4`, `crawl4ai`) also show as Pyright errors because they're runtime deps, not dev deps. Expected.
+- External library imports (`httpx`, `trafilatura`, `bs4`, `crawl4ai`, `ddgs`) also show as Pyright errors because they're runtime deps, not dev deps. Expected.
 
 - `_deps.py` auto-installs missing pip packages per command on first run. A stamp file in `.deps_cache/` prevents re-checking on subsequent runs. On Python 3.14+, it auto-detects and uses an older Python for pip installs if available.
 
@@ -40,7 +40,8 @@ All output is JSON on stdout. Logs go to stderr only. **Never print non-JSON to 
 | Commands | Packages needed |
 | --- | --- |
 | `extract`, `discover` | trafilatura |
-| `search`, `scrape`, `fetch` | httpx, httpx-retries, trafilatura, beautifulsoup4, lxml |
+| `scrape`, `fetch` | httpx, httpx-retries, trafilatura, beautifulsoup4, lxml |
+| `search` | httpx, httpx-retries, trafilatura, beautifulsoup4, lxml, [ddgs](https://github.com/deedy5/ddgs) |
 | `crawl` | all above + crawl4ai |
 
 `fetch` uses crawl4ai as an optional fallback only — it is not a hard dependency.
@@ -84,6 +85,7 @@ web-intel/
 │   ├── _config.py        # Shared config, httpx client factory, logging
 │   ├── _normalize.py     # Output normalization + JSON envelope
 │   ├── _searxng.py       # SearXNG search module
+│   ├── _search_fallback.py  # Brave + ddgs fallback search (https://github.com/deedy5/ddgs)
 │   ├── _httpx_fetch.py   # httpx + RetryTransport fetch
 │   ├── _trafilatura_extract.py  # Trafilatura extraction + discovery
 │   ├── _bs4_scrape.py    # BeautifulSoup structured extraction

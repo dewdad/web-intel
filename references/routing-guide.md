@@ -49,7 +49,7 @@ Decision tree for choosing the right command and component.
 ### `search`
 1. **SearXNG** (self-hosted, multi-engine, fully ranked)
 2. If SearXNG unavailable → **Brave Search API** (if `BRAVE_API_KEY` is set)
-3. If Brave unavailable → **ddgs** (zero-config, fans out to 6+ engines)
+3. If Brave unavailable → **[ddgs](https://github.com/deedy5/ddgs)** (zero-config, fans out to 6+ engines)
 4. All fail → error
 
 `quality_score` is fully computed only with SearXNG (term overlap + engine count + raw score). With ddgs/Brave fallbacks, only term overlap is available.

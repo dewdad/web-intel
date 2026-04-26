@@ -71,7 +71,7 @@ $SKILL_DIR/bin/web-intel setup --pretty           # auto-starts SearXNG
 $SKILL_DIR/bin/web-intel search "query" --pretty
 ```
 
-Search fallback chain: **SearXNG → Brave Search API (if BRAVE_API_KEY set) → ddgs (zero-config)**. Search works even without Docker via ddgs.
+Search fallback chain: **SearXNG → Brave Search API (if BRAVE_API_KEY set) → [ddgs](https://github.com/deedy5/ddgs) (zero-config)**. Search works even without Docker via ddgs.
 
 **Tier 3 — Needs Crawl4AI browser:** `crawl`, `fetch` fallback
 
@@ -185,7 +185,7 @@ $SKILL_DIR/bin/web-intel discover URL [--mode sitemap|crawl|both] [--max-urls 10
 ```
 fetch:  httpx+Trafilatura ─[empty/JS]─> Crawl4AI+Trafilatura ─[fail]─> error
 scrape: httpx+BS4 ─[empty/JS]─> Crawl4AI+BS4 ─[fail]─> error
-search: SearXNG ─[fail]─> Brave Search API ─[fail]─> ddgs (multi-engine) ─[fail]─> error
+search: SearXNG ─[fail]─> Brave Search API ─[fail]─> [ddgs](https://github.com/deedy5/ddgs) (multi-engine) ─[fail]─> error
 ```
 
 ## Output Envelope
