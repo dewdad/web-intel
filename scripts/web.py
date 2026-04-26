@@ -631,71 +631,55 @@ def cmd_doctor(args: argparse.Namespace) -> None:
 
     # 4. Docker available
     docker_ok = shutil.which("docker") is not None
-    checks.append(
-        {
-            "check": "docker",
-            "status": "ok" if docker_ok else "missing",
-            "hint": ""
-            if docker_ok
-            else "Install Docker: https://docs.docker.com/get-docker/",
-        }
-    )
+    checks.append({
+        "check": "docker",
+        "status": "ok" if docker_ok else "missing",
+        "hint": "" if docker_ok else "Install Docker: https://docs.docker.com/get-docker/",
+    })
 
-    # 5. SearXNG running
-    searxng_ok = False
-    if docker_ok:
-        try:
-            out = subprocess.run(
-                [
-                    "docker",
-                    "ps",
-                    "--filter",
-                    "name=wrs-searxng",
-                    "--format",
-                    "{{.Status}}",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            searxng_ok = "Up" in out.stdout
-        except Exception:
-            pass
-    checks.append(
-        {
-            "check": "searxng_docker",
-            "status": "ok" if searxng_ok else "not_running",
-            "hint": ""
-            if searxng_ok
-            else f"docker compose -f {_SKILL_DIR}/docker/docker-compose.searxng.yml up -d",
-        }
-    )
+    # 5–6. SearXNG container + API (via _docker module)
+    from _docker import discover_container, probe_searxng
+    from _config import SEARXNG_URL
 
-    # 6. SearXNG API reachable
-    searxng_api_ok = False
-    if searxng_ok:
-        try:
-            from _config import SEARXNG_URL
-            import urllib.request
+    searxng_info = discover_container("wrs-searxng") if docker_ok else None
+    searxng_running = searxng_info is not None and searxng_info.status == "running"
 
-            req = urllib.request.Request(
-                f"{SEARXNG_URL}/search?q=test&format=json", method="GET"
-            )
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                searxng_api_ok = resp.status == 200
-        except Exception:
-            pass
-    checks.append(
-        {
-            "check": "searxng_api",
-            "status": "ok"
-            if searxng_api_ok
-            else ("skip" if not searxng_ok else "fail"),
-            "hint": ""
-            if searxng_api_ok
-            else "Ensure 'json' is in search.formats in docker/searxng/settings.yml",
-        }
+    checks.append({
+        "check": "searxng_docker",
+        "status": "ok" if searxng_running else "not_running",
+        "hint": "" if searxng_running
+                else f"docker compose -f {_SKILL_DIR}/docker/docker-compose.searxng.yml up -d",
+    })
+
+    probe_url = (
+        f"http://localhost:{searxng_info.host_port}"
+        if searxng_running and searxng_info.host_port
+        else os.environ.get("SEARXNG_URL", SEARXNG_URL)
     )
+    searxng_probe = probe_searxng(probe_url) if searxng_running else None
+
+    checks.append({
+        "check": "searxng_api",
+        "status": "ok" if (searxng_probe and searxng_probe.reachable) else ("skip" if not searxng_running else "fail"),
+        "hint": "" if (searxng_probe and searxng_probe.reachable)
+                else "Ensure 'json' is in search.formats in docker/searxng/settings.yml",
+    })
+
+    engines_degraded = searxng_probe.engines_degraded if searxng_probe else False
+    checks.append({
+        "check": "searxng_engines",
+        "status": "degraded" if engines_degraded else ("ok" if (searxng_probe and searxng_probe.reachable) else "skip"),
+        "hint": "Upstream engines rate-limited; will auto-fallback to Brave/ddgs" if engines_degraded else "",
+    })
+
+    if searxng_running and searxng_info.volume_sources:
+        expected_mount = str(_SKILL_DIR / "docker" / "searxng")
+        stale = expected_mount not in searxng_info.volume_sources
+        checks.append({
+            "check": "searxng_volume_mount",
+            "status": "stale" if stale else "ok",
+            "hint": "run: web-intel setup --recreate-searxng" if stale else "",
+        })
 
     brave_key = os.environ.get("BRAVE_API_KEY")
     checks.append({
@@ -834,6 +818,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     )
     if core_deps_ok:
         ready_tiers.extend(["fetch", "extract", "discover", "scrape"])
+    searxng_api_ok = bool(searxng_probe and searxng_probe.reachable and not searxng_probe.engines_degraded)
     search_ready = (
         (searxng_api_ok and core_deps_ok)
         or (brave_key and core_deps_ok)
