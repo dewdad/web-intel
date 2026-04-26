@@ -124,3 +124,16 @@ def test_chunking_also_updates_text_field():
     _apply_chunking(r, 50, 0)
     assert len(r.text) < len(content)
     assert r.text == r.markdown
+
+
+from _relevance import fit_markdown
+
+
+def test_fit_markdown_called_on_fetch_top_content():
+    """fit_markdown removes boilerplate from content markdown."""
+    noise = "Cookie policy. Privacy. All rights reserved. Subscribe to newsletter."
+    article = "The attention mechanism in transformers computes weighted sums over value vectors using softmax-normalized dot products."
+    raw_md = f"{noise}\n\n{article}"
+    result = fit_markdown(raw_md, query="attention mechanism transformers")
+    assert article in result
+    assert "Cookie policy" not in result

@@ -149,6 +149,12 @@ def cmd_search(args: argparse.Namespace) -> None:
             if content.get("error") is None:
                 content.pop("error", None)
             r["content"] = content
+            if content.get("markdown") and not getattr(args, "no_fit", False):
+                from _relevance import fit_markdown
+                content["markdown"] = fit_markdown(
+                    content["markdown"], query=args.query
+                )
+                r["content"] = content
             if not r.get("published_at") and content.get("published_at"):
                 r["published_at"] = content["published_at"]
                 r.setdefault("meta_enriched", []).append("published_at")
@@ -1007,6 +1013,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--enrich-timeout", dest="enrich_timeout", type=int, default=8,
                           help="Per-request timeout in seconds for enrichment head-fetches (default: 8).")
     p_search.add_argument("--pretty", action="store_true")
+    p_search.add_argument(
+        "--no-fit",
+        dest="no_fit",
+        action="store_true",
+        default=False,
+        help="Skip fit_markdown noise pruning on --fetch-top content (default: pruning enabled)",
+    )
     p_search.set_defaults(func=cmd_search)
 
     p_fetch = sub.add_parser("fetch")
