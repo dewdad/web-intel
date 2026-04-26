@@ -86,6 +86,7 @@ $SKILL_DIR/bin/web-intel crawl "https://spa.example.com" --pretty
 ```bash
 $SKILL_DIR/bin/web-intel doctor --pretty   # check all deps, services, and search backends
 $SKILL_DIR/bin/web-intel setup --pretty    # auto-fix: install deps, start SearXNG, create .env
+$SKILL_DIR/bin/web-intel setup --clear-cache --pretty  # clear dep-stamp cache and page-diff cache
 ```
 
 `doctor` returns JSON with `ready_commands`, `search_backend` (which backend will be used), and per-dependency `checks[]`.
@@ -97,7 +98,8 @@ $SKILL_DIR/bin/web-intel setup --pretty    # auto-fix: install deps, start SearX
 ```bash
 $SKILL_DIR/bin/web-intel search "query" [--engines google,brave] [--categories general] [--language en]
   [--time-range week] [--max-results 10] [--no-rerank] [--no-fallback]
-  [--fetch-top N] [--fetch-concurrency 3] [--fetch-timeout 20]
+  [--mode fast|deep]
+  [--fetch-top N] [--fetch-concurrency 3] [--fetch-timeout 20] [--no-fit]
   [--no-enrich] [--enrich-concurrency 5] [--enrich-timeout 8]
   [--no-cite]
 ```
@@ -107,6 +109,9 @@ $SKILL_DIR/bin/web-intel search "query" [--engines google,brave] [--categories g
 - `--no-fallback`: Fail immediately if SearXNG unavailable (skip ddgs/Brave fallbacks).
 - `--no-enrich`: Skip head-fetch enrichment for missing `published_at`/`authors`. Faster; sourcing may be incomplete.
 - `--no-cite`: Omit `citations[]` array and `citation_index` from output.
+- `--mode fast`: Disable enrichment/citations, limit to 5 results for low-latency pipelines.
+- `--mode deep`: Enable enrichment + citations + `--fetch-top 3` + 10 results for deep research.
+- `--no-fit`: When using `--fetch-top`, skip `fit_markdown` noise pruning on fetched content (default: pruning enabled).
 - `--enrich-concurrency N`: Max concurrent enrichment head-fetches (default: 5).
 - `--enrich-timeout N`: Per-request enrichment timeout in seconds (default: 8).
 
@@ -117,10 +122,12 @@ Top-level: `citations[]` — always present (unless `--no-cite`), one entry per 
 
 `quality_score` accuracy: highest with SearXNG (all components active), lower with fallback backends (overlap-only for ddgs).
 
+`backend`: `"searxng"` | `"brave"` | `"ddgs"` — which provider handled the query. Agents can branch: `if backend == "ddgs": ignore quality_score`.
+
 ### `fetch` — Fast static page fetch + extraction
 
 ```bash
-$SKILL_DIR/bin/web-intel fetch URL [--include-tables] [--include-links] [--favor-precision|--favor-recall] [--output-format markdown] [--timeout 30] [--max-tokens N] [--chunk-tokens N] [--chunk-index I] [--relevant-to "query"] [--relevant-top 10] [--wait-for-text "text"] [--diff]
+$SKILL_DIR/bin/web-intel fetch URL [--include-tables] [--include-links] [--favor-precision|--favor-recall] [--output-format markdown] [--timeout 30] [--max-tokens N] [--chunk-tokens N] [--chunk-index I] [--relevant-to "query"] [--relevant-top 10] [--wait-for-text "text"] [--diff] [--no-cache]
 ```
 
 - `--max-tokens N`: Truncate output to approximately N tokens (1 token ≈ 4 chars). Adds `truncated=true` and `char_count` when truncated.
@@ -128,6 +135,7 @@ $SKILL_DIR/bin/web-intel fetch URL [--include-tables] [--include-links] [--favor
 - `--relevant-to "query"`: Filter content to the most relevant paragraphs using TF-IDF scoring. Use `--relevant-top N` (default 10) to control how many paragraphs to return.
 - `--wait-for-text "text"`: Retry httpx fetch until this text appears in the extracted content (max 3 retries, 2s delay). **Static pages only** — does not work for JS-gated content; use `crawl` instead.
 - `--diff`: Compare content hash to cached version. Response includes `changed` (null=first visit, true/false), `current_hash`, `previous_hash`.
+- `--no-cache`: Skip reading and writing the content diff cache for this request. Use in agent loops to force a fresh fetch without storing results.
 
 `--chunk-tokens` and `--max-tokens` are mutually exclusive; `--chunk-tokens` takes precedence.
 
@@ -158,13 +166,14 @@ echo "<html>..." | $SKILL_DIR/bin/web-intel extract --stdin
 ### `fetch-batch` — Parallel batch URL fetching
 
 ```bash
-echo -e "https://a.com\nhttps://b.com" | $SKILL_DIR/bin/web-intel fetch-batch [--concurrency 3] [--domain-delay 1.0] [--max-tokens 2000]
+echo -e "https://a.com\nhttps://b.com" | $SKILL_DIR/bin/web-intel fetch-batch [--concurrency 3] [--domain-delay 1.0] [--max-tokens 2000] [--json-array]
 $SKILL_DIR/bin/web-intel fetch-batch --url-file urls.txt --concurrency 5
 
 $SKILL_DIR/bin/web-intel discover https://docs.example.com | jq -r '.urls[:20][]' | $SKILL_DIR/bin/web-intel fetch-batch
 ```
 
 Output: NDJSON (one JSON object per line per URL). Use `--domain-delay 1.0` to enforce per-domain rate limiting.
+- `--json-array`: Output a JSON array instead of NDJSON. Use when batch results must be parsed with `json.loads()` alongside single-command results.
 
 ### `discover` — Site URL discovery
 
@@ -181,6 +190,8 @@ $SKILL_DIR/bin/web-intel discover URL [--mode sitemap|crawl|both] [--max-urls 10
 |------|---------|------|-----|
 | Research a topic | `search` | 1-2 | Falls back to ddgs if no Docker |
 | Research + read top results | `search --fetch-top 3` | 1-2 | One-shot pipeline |
+| Fast search pipeline | `search --mode fast` | 1-2 | Disables enrichment, 5 results, low latency |
+| Deep research | `search --mode deep` | 1-2 | Enrichment + fetch-top 3 + 10 results |
 | Read article/blog/docs | `fetch` | 1 | Fast httpx + Trafilatura |
 | Long article, need section | `fetch --relevant-to "query"` | 1 | TF-IDF paragraph filter |
 | Long article, paginated | `fetch --chunk-tokens 1000` | 1 | Return one chunk at a time |
@@ -206,9 +217,9 @@ Every command returns JSON with `status` (`ok`|`partial`|`failed`), `command`, `
 
 - **fetch/crawl/extract**: `url`, `title`, `markdown`, `text`, `confidence`, `fetch_mode`, `extract_mode`; optional `char_count`, `truncated`, `chunk_index`, `chunk_count`, `chunk_tokens`, `changed`, `current_hash`, `previous_hash`. Always includes `citation` object (url, title, site_name, published_at, authors, citation_text) and source attribution appended to `markdown`.
 - **scrape**: above + `tables` (3D array) or selector results or `--schema` JSON in `text`/`markdown`
-- **search**: `query`, `results[]` (url, title, snippet, engine, engines[], score, domain, published_at, authors, quality_score, category, citation_index, meta_enriched[], meta_source), `total_results`, `number_of_results`, `citations[]`
+- **search**: `query`, `results[]` (url, title, snippet, engine, engines[], score, domain, published_at, authors, quality_score, category, citation_index, meta_enriched[], meta_source), `total_results`, `number_of_results`, `citations[]`, `backend` ("searxng" | "brave" | "ddgs" — which provider was used)
 - **discover**: `base_url`, `mode`, `urls[]`, `url_entries[]` (with depth/lastmod/priority), `total_urls`
-- **fetch-batch**: NDJSON (one envelope per URL on stdout), each with `citation` object
+- **fetch-batch**: NDJSON (one envelope per URL on stdout), each with `citation` object. Use `--json-array` for a single JSON array instead.
 - **doctor**: `ready_commands[]`, `search_backend`, `checks[]` with status/hint per dependency
 
 Full schema: `references/output-schema.md`
