@@ -894,34 +894,22 @@ def cmd_setup(args: argparse.Namespace) -> None:
         )
 
     # 3. Start SearXNG if Docker available and not running
-    if shutil.which("docker"):
-        try:
-            out = subprocess.run(
-                [
-                    "docker",
-                    "ps",
-                    "--filter",
-                    "name=wrs-searxng",
-                    "--format",
-                    "{{.Status}}",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if "Up" not in out.stdout:
-                compose_file = _SKILL_DIR / "docker" / "docker-compose.searxng.yml"
-                subprocess.run(
-                    ["docker", "compose", "-f", str(compose_file), "up", "-d"],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-                steps.append({"step": "searxng", "status": "started"})
-            else:
-                steps.append({"step": "searxng", "status": "already_running"})
-        except Exception as exc:
-            steps.append({"step": "searxng", "status": "failed", "error": str(exc)})
+    from _docker import ensure_searxng_running, recreate_searxng
+
+    if getattr(args, "recreate_searxng", False):
+        result = recreate_searxng(_SKILL_DIR)
+        if result.error:
+            steps.append({"step": "searxng", "status": result.action, "error": result.error})
+        else:
+            steps.append({"step": "searxng", "status": "recreated"})
+    elif shutil.which("docker"):
+        result = ensure_searxng_running(_SKILL_DIR)
+        step = {"step": "searxng", "status": result.action}
+        if result.stale_mount:
+            step["warning"] = result.stale_mount_hint
+        if result.error:
+            step["error"] = result.error
+        steps.append(step)
     else:
         steps.append({"step": "searxng", "status": "skip", "hint": "Docker not found"})
 
@@ -1204,6 +1192,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Clear dep-stamp cache and page-diff cache, forcing re-check on next run.",
+    )
+    p_setup.add_argument(
+        "--recreate-searxng",
+        dest="recreate_searxng",
+        action="store_true",
+        default=False,
+        help="Tear down and recreate the wrs-searxng container (fixes stale volume mounts).",
     )
     p_setup.add_argument("--pretty", action="store_true")
     p_setup.set_defaults(func=cmd_setup)
