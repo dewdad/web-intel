@@ -74,3 +74,15 @@ def test_dedup_logic_merges_engines_and_takes_max_score():
     assert len(deduped) == 1
     assert set(deduped[0]["engines"]) == {"google", "bing"}
     assert deduped[0]["score"] == 1.5
+
+
+def test_search_result_has_backend_searxng():
+    from unittest.mock import patch, MagicMock
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"results": [], "number_of_results": 0}
+    mock_resp.raise_for_status = MagicMock()
+    with patch("_searxng.create_httpx_client") as mock_client:
+        mock_client.return_value.__enter__.return_value.get.return_value = mock_resp
+        from _searxng import search
+        result = search("test query")
+    assert result.backend == "searxng"

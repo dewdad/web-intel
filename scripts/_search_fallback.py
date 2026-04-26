@@ -22,17 +22,20 @@ def search_ddgs(
             return SearchResult(
                 query=query, status="failed",
                 error=f"ddgs rate limited: {exc}", timing_ms=t.elapsed_ms,
+                backend="ddgs",
             )
         except Exception as exc:
             return SearchResult(
                 query=query, status="failed",
                 error=f"ddgs fallback failed: {exc}", timing_ms=t.elapsed_ms,
+                backend="ddgs",
             )
 
     if not raw:
         return SearchResult(
             query=query, status="partial",
             error="ddgs returned no results", timing_ms=t.elapsed_ms,
+            backend="ddgs",
         )
 
     results = [
@@ -54,6 +57,7 @@ def search_ddgs(
     return SearchResult(
         query=query, results=results,
         total_results=len(results), timing_ms=t.elapsed_ms,
+        backend="ddgs",
     )
 
 
@@ -78,7 +82,8 @@ def search_brave(
                 data = resp.json()
         except Exception as exc:
             return SearchResult(query=query, status="failed",
-                                error=f"Brave Search API failed: {exc}", timing_ms=t.elapsed_ms)
+                                error=f"Brave Search API failed: {exc}", timing_ms=t.elapsed_ms,
+                                backend="brave")
 
     web_results = data.get("web", {}).get("results", [])[:max_results]
     results = [
@@ -96,4 +101,5 @@ def search_brave(
         }
         for r in web_results
     ]
-    return SearchResult(query=query, results=results, total_results=len(results), timing_ms=t.elapsed_ms)
+    return SearchResult(query=query, results=results, total_results=len(results), timing_ms=t.elapsed_ms,
+                        backend="brave")

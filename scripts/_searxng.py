@@ -71,6 +71,7 @@ def search(
                 status="failed",
                 error=f"SearXNG request failed: {exc}. Is SearXNG running at {SEARXNG_URL}?",
                 timing_ms=t.elapsed_ms,
+                backend="searxng",
             )
 
     raw_results = data.get("results", [])
@@ -113,4 +114,5 @@ def search(
         total_results=len(mapped),
         number_of_results=number_of_results,
         timing_ms=t.elapsed_ms,
+        backend="searxng",
     )

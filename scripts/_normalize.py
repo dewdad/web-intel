@@ -146,6 +146,7 @@ class SearchResult:
     command: str = "search"
     error: Optional[str] = None
     citations: list[str] = field(default_factory=list)
+    backend: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -153,6 +154,8 @@ class SearchResult:
             d.pop("error", None)
         if not d.get("citations"):
             d.pop("citations", None)
+        if not d.get("backend"):
+            d.pop("backend", None)
         return d
 
 

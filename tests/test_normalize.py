@@ -79,3 +79,16 @@ def test_emit_error_writes_valid_json(capsys):
     assert data["status"] == "failed"
     assert data["command"] == "test-cmd"
     assert data["error"] == "something went wrong"
+
+
+def test_searchresult_backend_field_preserved():
+    r = SearchResult(query="test", backend="ddgs")
+    d = r.to_dict()
+    assert d["backend"] == "ddgs"
+
+
+def test_searchresult_backend_defaults_to_empty():
+    r = SearchResult(query="test")
+    d = r.to_dict()
+    # empty string should be omitted per to_dict convention
+    assert "backend" not in d or d.get("backend") == ""
