@@ -117,21 +117,32 @@ async def _crawl_docker(
 
     with Timer() as t:
         try:
-            payload: dict[str, Any] = {
-                "urls": url,
-                "priority": 5,
+            # crawler_config params — build only non-default values
+            crawler_params: dict[str, Any] = {
+                "stream": False,
+                "cache_mode": "bypass",
+                "page_timeout": timeout * 1000,
             }
-            crawler_params: dict[str, Any] = {}
             if wait_for:
                 crawler_params["wait_for"] = f"css:{wait_for}"
             if execute_js:
                 crawler_params["js_code"] = [execute_js]
             if screenshot:
                 crawler_params["screenshot"] = True
-            crawler_params["page_timeout"] = timeout * 1000
 
-            if crawler_params:
-                payload["crawler_params"] = crawler_params
+            # Schema: CrawlRequestWithHooks — urls must be a list; configs use
+            # {"type": "ClassName", "params": {...}} wrapper (crawl4ai deploy/docker/schemas.py)
+            payload: dict[str, Any] = {
+                "urls": [url],
+                "browser_config": {
+                    "type": "BrowserConfig",
+                    "params": {"headless": True},
+                },
+                "crawler_config": {
+                    "type": "CrawlerRunConfig",
+                    "params": crawler_params,
+                },
+            }
 
             headers: dict[str, str] = {"Content-Type": "application/json"}
             if CRAWL4AI_API_KEY:
@@ -156,15 +167,67 @@ async def _crawl_docker(
                 timing_ms=t.elapsed_ms,
             )
 
-    result_data = data.get("result", data)
+    # Response shape: {"success": true, "results": [CrawlResult, ...]}
+    # CrawlResult.markdown is a MarkdownGenerationResult object, not a plain string.
+    results_list = data.get("results", [])
+    if not results_list:
+        return WebResult(
+            url=url,
+            status="failed",
+            fetch_mode="crawl4ai",
+            error="Crawl4AI Docker returned empty results list",
+            timing_ms=t.elapsed_ms,
+        )
+
+    result_data = results_list[0]
+    if not result_data.get("success"):
+        return WebResult(
+            url=url,
+            status="failed",
+            fetch_mode="crawl4ai",
+            error=f"Crawl4AI Docker reported failure: {result_data.get('error_message', 'unknown')}",
+            timing_ms=t.elapsed_ms,
+        )
+
+    # markdown field is a nested object: {raw_markdown, fit_markdown, ...}
+    markdown_obj = result_data.get("markdown") or {}
+    if isinstance(markdown_obj, dict):
+        markdown = (
+            markdown_obj.get("fit_markdown")
+            or markdown_obj.get("markdown_with_citations")
+            or markdown_obj.get("raw_markdown")
+            or ""
+        )
+    else:
+        # older server versions may return a plain string
+        markdown = str(markdown_obj)
+
+    links_raw = result_data.get("links") or {}
+    links = [
+        {"url": l.get("href", ""), "text": l.get("text", "")}
+        for l in (links_raw.get("internal", []) + links_raw.get("external", []))
+        if isinstance(l, dict)
+    ]
+
+    images_raw = (result_data.get("media") or {}).get("images", [])
+    images = [
+        {"url": img.get("src", ""), "alt": img.get("alt", "")}
+        for img in images_raw
+        if isinstance(img, dict)
+    ]
+
     return WebResult(
         url=url,
-        markdown=result_data.get("markdown", ""),
-        text=result_data.get("extracted_content", result_data.get("markdown", "")),
+        canonical_url=result_data.get("url", url),
+        title=(result_data.get("metadata") or {}).get("title", ""),
+        markdown=markdown,
+        text=result_data.get("extracted_content", "") or markdown,
+        links=links,
+        images=images,
         fetch_mode="crawl4ai",
         extract_mode="crawl4ai_markdown",
         source_engine="crawl4ai",
-        confidence=0.8 if result_data.get("markdown") else 0.3,
+        confidence=0.8 if markdown else 0.3,
         timing_ms=t.elapsed_ms,
     )
 

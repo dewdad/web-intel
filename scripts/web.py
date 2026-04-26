@@ -14,6 +14,18 @@ sys.path.insert(0, str(_SCRIPTS_DIR))
 from _normalize import emit, emit_error, Timer
 
 
+def _crawl4ai_docker_available() -> bool:
+    import urllib.request
+    from _config import CRAWL4AI_DOCKER_URL
+
+    try:
+        req = urllib.request.Request(f"{CRAWL4AI_DOCKER_URL}/health", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 def cmd_search(args: argparse.Namespace) -> None:
     from _searxng import search
 
@@ -27,6 +39,24 @@ def cmd_search(args: argparse.Namespace) -> None:
         pageno=args.pageno,
     )
     emit(result.to_dict(), pretty=args.pretty)
+
+
+_FETCH_FALLBACK_SIGNALS = (
+    "javascript",
+    "js-rendered",
+    "dynamic content",
+    "empty content",
+    "requires javascript",
+)
+
+
+def _should_fallback_to_crawl(result: "WebResult") -> bool:
+    if result.status not in ("failed", "partial"):
+        return False
+    if not result.markdown and not result.text:
+        return True
+    error_lower = (result.error or "").lower()
+    return any(sig in error_lower for sig in _FETCH_FALLBACK_SIGNALS)
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
@@ -44,20 +74,19 @@ def cmd_fetch(args: argparse.Namespace) -> None:
         timeout=args.timeout,
     )
 
-    if (
-        args.fallback_crawl
-        and result.status in ("failed", "partial")
-        and "JavaScript" in (result.error or "")
-    ):
+    if args.fallback_crawl and _should_fallback_to_crawl(result):
         try:
             from _crawl4ai_crawl import crawl
-
+        except ImportError:
+            result.error = (
+                (result.error or "")
+                + " | crawl4ai fallback unavailable: run 'setup --tier all'"
+            )
+            result.status = "partial"
+        else:
             crawl_result = crawl(args.url, timeout=args.timeout)
             if crawl_result.status == "ok" and crawl_result.markdown:
                 result = crawl_result
-                result.command = "fetch"
-        except ImportError:
-            pass
 
     result.command = "fetch"
     emit(result.to_dict(), pretty=args.pretty)
@@ -66,6 +95,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 def cmd_crawl(args: argparse.Namespace) -> None:
     from _crawl4ai_crawl import crawl
 
+    use_docker = args.docker or (not args.docker and _crawl4ai_docker_available())
     result = crawl(
         args.url,
         wait_for=args.wait_for,
@@ -74,7 +104,7 @@ def cmd_crawl(args: argparse.Namespace) -> None:
         execute_js=args.execute_js,
         timeout=args.timeout,
         headless=args.headless,
-        use_docker=args.docker,
+        use_docker=use_docker,
     )
     result.command = "crawl"
     emit(result.to_dict(), pretty=args.pretty)
@@ -84,13 +114,20 @@ def cmd_scrape(args: argparse.Namespace) -> None:
     from _httpx_fetch import fetch
     from _bs4_scrape import scrape_selector, scrape_tables, scrape_lists
 
-    if args.use_crawl4ai:
-        from _crawl4ai_crawl import get_raw_html
+    use_crawl4ai = args.use_crawl4ai or _crawl4ai_docker_available()
 
+    if use_crawl4ai:
+        try:
+            from _crawl4ai_crawl import get_raw_html
+        except ImportError:
+            use_crawl4ai = False
+
+    if use_crawl4ai:
         html = get_raw_html(
             args.url,
             wait_for=getattr(args, "wait_for", None),
             timeout=getattr(args, "timeout", 60),
+            use_docker=_crawl4ai_docker_available(),
         )
         fetch_mode = "crawl4ai"
     else:
@@ -303,7 +340,63 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         }
     )
 
-    # 7. Crawl4AI browser
+    # 7. Crawl4AI Docker container running
+    crawl4ai_docker_ok = False
+    if docker_ok:
+        try:
+            out = subprocess.run(
+                [
+                    "docker",
+                    "ps",
+                    "--filter",
+                    "name=wrs-crawl4ai",
+                    "--format",
+                    "{{.Status}}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            crawl4ai_docker_ok = "Up" in out.stdout
+        except Exception:
+            pass
+    checks.append(
+        {
+            "check": "crawl4ai_docker",
+            "status": "ok" if crawl4ai_docker_ok else "not_running",
+            "hint": ""
+            if crawl4ai_docker_ok
+            else f"docker compose -f {_SKILL_DIR}/docker/docker-compose.yml up -d crawl4ai",
+        }
+    )
+
+    # 8. Crawl4AI Docker API reachable
+    crawl4ai_api_ok = False
+    if crawl4ai_docker_ok:
+        try:
+            from _config import CRAWL4AI_DOCKER_URL
+            import urllib.request
+
+            req = urllib.request.Request(
+                f"{CRAWL4AI_DOCKER_URL}/health", method="GET"
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                crawl4ai_api_ok = resp.status == 200
+        except Exception:
+            pass
+    checks.append(
+        {
+            "check": "crawl4ai_api",
+            "status": "ok"
+            if crawl4ai_api_ok
+            else ("skip" if not crawl4ai_docker_ok else "fail"),
+            "hint": ""
+            if crawl4ai_api_ok
+            else f"Check crawl4ai container logs: docker logs wrs-crawl4ai",
+        }
+    )
+
+    # 9. Crawl4AI local browser
     crawl4ai_browser_ok = False
     try:
         playwright_paths = [
@@ -343,7 +436,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     else:
         checks.append({"check": "crawl4ai_browser", "status": "ok"})
 
-    # 8. .env file
+    # 10. .env file
     env_file = _SKILL_DIR / ".env"
     checks.append(
         {
@@ -367,7 +460,9 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         ready_tiers.extend(["fetch", "extract", "discover", "scrape"])
     if searxng_api_ok and core_deps_ok:
         ready_tiers.append("search")
-    if crawl4ai_browser_ok and core_deps_ok:
+    if crawl4ai_api_ok and core_deps_ok:
+        ready_tiers.append("crawl")
+    elif crawl4ai_browser_ok and core_deps_ok:
         ready_tiers.append("crawl")
 
     emit(
@@ -456,7 +551,51 @@ def cmd_setup(args: argparse.Namespace) -> None:
     else:
         steps.append({"step": "searxng", "status": "skip", "hint": "Docker not found"})
 
-    # 4. Crawl4AI browser setup (only if tier=all)
+    # 4. Start Crawl4AI Docker container (only if tier=all)
+    if tier == "all" and shutil.which("docker"):
+        try:
+            out = subprocess.run(
+                [
+                    "docker",
+                    "ps",
+                    "--filter",
+                    "name=wrs-crawl4ai",
+                    "--format",
+                    "{{.Status}}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if "Up" not in out.stdout:
+                compose_file = _SKILL_DIR / "docker" / "docker-compose.yml"
+                subprocess.run(
+                    [
+                        "docker",
+                        "compose",
+                        "-f",
+                        str(compose_file),
+                        "up",
+                        "-d",
+                        "crawl4ai",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                steps.append({"step": "crawl4ai_docker", "status": "started"})
+            else:
+                steps.append({"step": "crawl4ai_docker", "status": "already_running"})
+        except Exception as exc:
+            steps.append(
+                {"step": "crawl4ai_docker", "status": "failed", "error": str(exc)}
+            )
+    elif tier == "all":
+        steps.append(
+            {"step": "crawl4ai_docker", "status": "skip", "hint": "Docker not found"}
+        )
+
+    # 5. Crawl4AI local browser setup (only if tier=all)
     if tier == "all":
         crawl4ai_setup_bin = shutil.which("crawl4ai-setup")
         if crawl4ai_setup_bin:
@@ -549,6 +688,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_scrape.add_argument("--table", action="store_true")
     p_scrape.add_argument("--list", action="store_true")
     p_scrape.add_argument("--use-crawl4ai", action="store_true")
+    p_scrape.add_argument("--timeout", type=int, default=60)
     p_scrape.add_argument("--pretty", action="store_true")
     p_scrape.set_defaults(func=cmd_scrape)
 
@@ -598,7 +738,10 @@ def main() -> None:
     if args.command not in ("doctor", "setup"):
         from _deps import ensure_deps
 
-        ensure_deps(args.command)
+        dep_key = args.command
+        if args.command == "scrape" and getattr(args, "use_crawl4ai", False):
+            dep_key = "scrape-crawl4ai"
+        ensure_deps(dep_key)
 
     try:
         args.func(args)
