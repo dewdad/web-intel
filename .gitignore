@@ -4,3 +4,6 @@ __pycache__/
 .crawl4ai/
 .deps_cache/
 .ruff_cache/
+.omc/sessions/
+.omc/state/agent-replay-*
+.claude/settings.local.json
