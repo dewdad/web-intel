@@ -41,3 +41,37 @@ def test_tokenize_lowercases_and_filters_short():
     assert "the" in tokens
     assert "quick" in tokens
     assert set(tokens) == {"the", "quick", "brown", "fox"}
+
+
+from _relevance import fit_markdown
+
+NAV_BLOCK = "Home About Contact Blog Privacy Policy Terms of Service"
+ARTICLE_PARA = "The transformer architecture introduced the attention mechanism which changed natural language processing fundamentally."
+FOOTER_BLOCK = "© 2024 Example Corp. All rights reserved. Cookie settings. Sitemap."
+CODE_BLOCK = "```python\ndef attention(q, k, v):\n    return softmax(q @ k.T) @ v\n```"
+
+def test_fit_markdown_removes_nav_and_footer():
+    md = f"{NAV_BLOCK}\n\n{ARTICLE_PARA}\n\n{FOOTER_BLOCK}"
+    result = fit_markdown(md)
+    assert ARTICLE_PARA in result
+    assert NAV_BLOCK not in result
+    assert FOOTER_BLOCK not in result
+
+def test_fit_markdown_preserves_code_blocks():
+    md = f"{ARTICLE_PARA}\n\n{CODE_BLOCK}"
+    result = fit_markdown(md)
+    assert "attention" in result
+
+def test_fit_markdown_with_query_boosts_relevant():
+    md = f"Cookie policy text.\n\n{ARTICLE_PARA}\n\nContact us for more info."
+    result = fit_markdown(md, query="transformer attention mechanism")
+    assert ARTICLE_PARA in result
+
+def test_fit_markdown_empty_returns_empty():
+    assert fit_markdown("") == ""
+
+def test_fit_markdown_no_query_still_removes_noise():
+    md = f"{NAV_BLOCK}\n\n{ARTICLE_PARA}"
+    result = fit_markdown(md)
+    # short nav-like blocks with no content signals are pruned
+    assert ARTICLE_PARA in result
