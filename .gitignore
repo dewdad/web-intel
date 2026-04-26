@@ -16,5 +16,4 @@ graphify-out/.needs_update
 .omc/sessions/
 .omc/state/agent-replay-*
 .claude/settings.local.json
-.sisyphus/
 raw/
