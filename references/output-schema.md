@@ -17,7 +17,7 @@ All commands return JSON to stdout. Logs go to stderr.
   "language": "en",
   "content_type": "article | documentation | forum | product | unknown",
   "summary": "First 200 chars...",
-  "markdown": "# Full content in markdown\n\nParagraph text...",
+  "markdown": "# Full content in markdown\n\n...\n\n---\n**Source:** [Title](url) · site · Published 2025-01-15 · By Author Name",
   "text": "Plain text version of content...",
   "links": [{"url": "https://...", "text": "Link text"}],
   "images": [{"url": "https://...", "alt": "Alt text"}],
@@ -27,6 +27,14 @@ All commands return JSON to stdout. Logs go to stderr.
   "extract_mode": "trafilatura | bs4 | crawl4ai_markdown",
   "confidence": 0.95,
   "timing_ms": 1234,
+  "citation": {
+    "url": "https://example.com/page",
+    "title": "Page Title",
+    "site_name": "example.com",
+    "published_at": "2025-01-15",
+    "authors": ["Author Name"],
+    "citation_text": "Author Name. \"Page Title\". example.com. 2025-01-15. https://example.com/page"
+  },
   "error": null
 }
 ```
@@ -40,11 +48,14 @@ All commands return JSON to stdout. Logs go to stderr.
 | `url` | string | always | Requested URL |
 | `canonical_url` | string | if available | Page's canonical URL (from metadata) |
 | `title` | string | if extracted | Page title |
-| `markdown` | string | if extracted | Primary content in markdown format |
+| `published_at` | string | if found | ISO `YYYY-MM-DD`. Empty string if not found. |
+| `authors` | array | if found | List of author name strings. Empty array if not found. |
+| `markdown` | string | if extracted | Primary content in markdown format. Always ends with `---\n**Source:** ...` attribution block. |
 | `text` | string | if extracted | Plain text fallback |
 | `tables` | array | scrape --table | 3D array: tables → rows → cells |
 | `confidence` | float | always | 0.0-1.0, how confident in extraction quality |
 | `timing_ms` | int | always | Total operation time in milliseconds |
+| `citation` | object | always | Structured citation: `url`, `title`, `site_name`, `published_at`, `authors`, `citation_text`. `citation_text` uses `(date unknown)` when `published_at` is absent. |
 | `error` | string | on failure | Error description with diagnostic hints |
 
 ### Empty fields are omitted from JSON output to reduce noise.
@@ -58,17 +69,58 @@ All commands return JSON to stdout. Logs go to stderr.
   "query": "python web scraping",
   "results": [
     {
+      "citation_index": 1,
       "url": "https://...",
       "title": "Result Title",
       "snippet": "Text excerpt from page...",
       "engine": "google",
-      "score": 1.5
+      "engines": ["google", "bing"],
+      "score": 1.5,
+      "domain": "example.com",
+      "published_at": "2025-03-12",
+      "authors": ["Jane Smith"],
+      "quality_score": 0.82,
+      "category": "general",
+      "meta_enriched": ["published_at", "authors"],
+      "meta_source": "json-ld"
     }
   ],
   "total_results": 10,
-  "timing_ms": 567
+  "timing_ms": 567,
+  "citations": [
+    "[1] Result Title by Jane Smith — example.com (2025-03-12) https://..."
+  ]
 }
 ```
+
+### Search result item fields
+
+| Field | Type | Description |
+|---|---|---|
+| `url` | string | Result URL |
+| `title` | string | Page title |
+| `snippet` | string | Text excerpt |
+| `engine` | string | Primary engine that returned this result |
+| `engines[]` | array | All engines that returned this URL (deduped) |
+| `score` | number | Raw engine relevance score |
+| `domain` | string | Bare domain extracted from URL (always populated) |
+| `published_at` | string | ISO `YYYY-MM-DD` or `""`. Always attempted via normalization + enrichment. |
+| `authors` | array | Author name strings. Always attempted. Empty array if not found. |
+| `quality_score` | float | 0.0-1.0 composite score (term overlap + engine count + raw score) |
+| `category` | string | SearXNG category (general, news, etc.) |
+| `citation_index` | int | 1-based index. Present unless `--no-cite`. |
+| `meta_enriched` | array | Fields filled by head-fetch enrichment: `["published_at"]`, `["authors"]`, or both. Empty array if enrichment found nothing. |
+| `meta_source` | string | Signal tier that found enriched data: `"json-ld"`, `"opengraph"`, `"meta"`, `"semantic-html"`, `"trafilatura"`, or `""`. |
+
+### Top-level search envelope fields
+
+| Field | Type | Description |
+|---|---|---|
+| `citations[]` | array | Always present unless `--no-cite`. One string per result: `"[N] Title by Author — domain (date) url"`. Uses `(date unknown)` when `published_at` is empty even after enrichment. |
+
+### Latency note
+
+Enrichment adds ~0–500ms total (concurrent, 5 workers by default). Results that already have both `published_at` and `authors` are skipped entirely at zero cost. Use `--no-enrich` to skip enrichment for speed-sensitive pipelines.
 
 ## Discover Result (discover command)
 

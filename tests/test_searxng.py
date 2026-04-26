@@ -3,7 +3,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from _searxng import _extract_domain, _compute_quality_score
+from _normalize import extract_domain as _extract_domain
+from _searxng import _compute_quality_score
 
 
 def test_extract_domain_strips_www():

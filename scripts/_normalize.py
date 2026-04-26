@@ -3,10 +3,82 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
+from urllib.parse import urlparse
+
+
+# ---------------------------------------------------------------------------
+# Date normalization
+# ---------------------------------------------------------------------------
+
+_ISO_RE = re.compile(r'(\d{4})-(\d{2})-(\d{2})')
+_SLASH_RE = re.compile(r'(\d{2})/(\d{2})/(\d{4})')
+
+
+def normalize_date(raw: str) -> str:
+    """
+    Accept ISO 8601, RFC 2822, partial dates, or common formats.
+    Return YYYY-MM-DD or "" for unparseable / relative strings.
+
+    Examples:
+        "2025-03-12T10:30:00Z"  -> "2025-03-12"
+        "March 12, 2025"        -> "2025-03-12"
+        "3 months ago"          -> ""   (relative — discard)
+        "2025-03"               -> "2025-03"  (partial OK)
+        ""                      -> ""
+    """
+    if not raw or not isinstance(raw, str):
+        return ""
+    raw = raw.strip()
+
+    # Already clean ISO prefix
+    m = _ISO_RE.search(raw)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+    # MM/DD/YYYY
+    m = _SLASH_RE.search(raw)
+    if m:
+        return f"{m.group(3)}-{m.group(1)}-{m.group(2)}"
+
+    # Try email/HTTP date formats via email.utils
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(raw)
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
+    # Try locale month names ("March 12, 2025", "12 March 2025")
+    try:
+        from datetime import datetime
+        for fmt in ("%B %d, %Y", "%d %B %Y", "%b %d, %Y", "%d %b %Y"):
+            try:
+                dt = datetime.strptime(raw, fmt)
+                return dt.strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+    except Exception:
+        pass
+
+    # Relative strings ("3 months ago", "yesterday") — discard
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Domain extraction
+# ---------------------------------------------------------------------------
+
+def extract_domain(url: str) -> str:
+    """Extract bare domain from URL, stripping www. prefix."""
+    try:
+        return urlparse(url).netloc.lower().removeprefix("www.")
+    except Exception:
+        return ""
 
 
 @dataclass
@@ -42,12 +114,15 @@ class WebResult:
     current_hash: str = ""
     previous_hash: str = ""
     changed: Optional[bool] = None
+    citation: Optional[dict] = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d.pop("html", None)
         if d.get("changed") is None:
             d.pop("changed", None)
+        if d.get("citation") is None:
+            d.pop("citation", None)
         d = {
             k: v
             for k, v in d.items()
@@ -70,11 +145,14 @@ class SearchResult:
     status: str = "ok"
     command: str = "search"
     error: Optional[str] = None
+    citations: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         if not d.get("error"):
             d.pop("error", None)
+        if not d.get("citations"):
+            d.pop("citations", None)
         return d
 
 

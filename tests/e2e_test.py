@@ -115,6 +115,8 @@ class TestDoctor:
             "crawl4ai_api",
             "crawl4ai_browser",
             "env_file",
+            "search_fallback_brave",
+            "search_fallback_ddgs",
         }
         for check in data["checks"]:
             name = check["check"]

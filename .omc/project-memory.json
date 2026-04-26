@@ -121,6 +121,12 @@
   },
   "hotPaths": [
     {
+      "path": "README.md",
+      "accessCount": 4,
+      "lastAccessed": 1777231073789,
+      "type": "file"
+    },
+    {
       "path": "graphify-out/GRAPH_REPORT.md",
       "accessCount": 1,
       "lastAccessed": 1777220483092,
@@ -130,12 +136,6 @@
       "path": "SKILL.md",
       "accessCount": 1,
       "lastAccessed": 1777220483155,
-      "type": "file"
-    },
-    {
-      "path": "README.md",
-      "accessCount": 1,
-      "lastAccessed": 1777220483207,
       "type": "file"
     }
   ],

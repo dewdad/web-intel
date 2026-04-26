@@ -4,7 +4,7 @@ import re
 from typing import Optional
 
 from _config import get_logger
-from _normalize import WebResult, DiscoverResult, Timer
+from _normalize import WebResult, DiscoverResult, Timer, normalize_date
 
 log = get_logger("trafilatura")
 
@@ -101,7 +101,7 @@ def _parse_metadata(html: str, url: str) -> dict:
             "title": meta.title or "",
             "canonical_url": meta.url or "",
             "sitename": meta.sitename or "",
-            "date": meta.date or "",
+            "date": normalize_date(meta.date or ""),
             "authors": [a for a in (meta.author or "").split(";") if a.strip()],
             "language": meta.pagetype or "",
         }

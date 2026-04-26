@@ -12,6 +12,7 @@ _SKILL_DIR = _SCRIPTS_DIR.parent
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from _normalize import emit, emit_error, Timer
+from _normalize import extract_domain
 from _config import get_logger
 
 log = get_logger("web")
@@ -59,6 +60,53 @@ def _fetch_parallel(urls: list[str], *, concurrency: int, timeout: int) -> list[
     return asyncio.run(_run_all())
 
 
+def _build_citation(result: "WebResult") -> dict:
+    domain = result.site_name or extract_domain(result.url)
+    date = result.published_at or ""
+    authors = result.authors or []
+    title = result.title or result.url
+    url = result.url
+
+    parts = [f'"{title}"']
+    if authors:
+        parts.insert(0, ", ".join(authors) + ".")
+    if domain:
+        parts.append(domain + ".")
+    parts.append(f"{date}." if date else "(date unknown).")
+    parts.append(url)
+
+    return {
+        "url": url,
+        "title": title,
+        "site_name": domain,
+        "published_at": date,
+        "authors": authors,
+        "citation_text": " ".join(p for p in parts if p),
+    }
+
+
+def _append_citation_to_markdown(result: "WebResult") -> None:
+    if not result.markdown:
+        return
+    domain = result.site_name or extract_domain(result.url)
+    date = result.published_at or ""
+    authors = result.authors or []
+    title = result.title or result.url
+    url = result.url
+
+    parts = [f"[{title}]({url})"]
+    if domain:
+        parts.append(f"· {domain}")
+    if date:
+        parts.append(f"· Published {date}")
+    else:
+        parts.append("· (date unknown)")
+    if authors:
+        parts.append(f"· By {', '.join(authors)}")
+
+    result.markdown = result.markdown.rstrip() + f"\n\n---\n**Source:** {' '.join(parts)}"
+
+
 def cmd_search(args: argparse.Namespace) -> None:
     from _searxng import search
 
@@ -101,8 +149,48 @@ def cmd_search(args: argparse.Namespace) -> None:
             if content.get("error") is None:
                 content.pop("error", None)
             r["content"] = content
+            if not r.get("published_at") and content.get("published_at"):
+                r["published_at"] = content["published_at"]
+                r.setdefault("meta_enriched", []).append("published_at")
+                r["meta_source"] = "fetch"
+            if not r.get("authors") and content.get("authors"):
+                r["authors"] = content["authors"]
+                r.setdefault("meta_enriched", []).append("authors")
+                r.setdefault("meta_source", "fetch")
 
-    emit(result.to_dict(), pretty=args.pretty)
+    if not getattr(args, "no_enrich", False) and result.status != "failed" and result.results:
+        from _meta_enrichment import enrich_search_results
+        enrich_search_results(
+            result.results,
+            concurrency=getattr(args, "enrich_concurrency", 5),
+            timeout=getattr(args, "enrich_timeout", 8),
+        )
+
+    result_dict = result.to_dict()
+    if not getattr(args, "no_cite", False) and result.results:
+        citations = []
+        for i, r in enumerate(result.results, start=1):
+            r["citation_index"] = i
+            domain = r.get("domain", "")
+            date = r.get("published_at", "")
+            authors = r.get("authors", [])
+            title = r.get("title", r.get("url", ""))
+            url = r.get("url", "")
+            parts = [f"[{i}]", title]
+            if authors:
+                parts.append(f"by {', '.join(authors)}")
+            if domain:
+                parts.append(f"— {domain}")
+            if date:
+                parts.append(f"({date})")
+            else:
+                parts.append("(date unknown)")
+            parts.append(url)
+            citations.append(" ".join(p for p in parts if p))
+        result_dict["citations"] = citations
+        result_dict["results"] = result.results
+
+    emit(result_dict, pretty=args.pretty)
 
 
 _FETCH_FALLBACK_SIGNALS = (
@@ -248,6 +336,8 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
     result.command = "fetch"
     result = _post_process_result(result, args)
+    result.citation = _build_citation(result)
+    _append_citation_to_markdown(result)
     emit(result.to_dict(), pretty=args.pretty)
 
 
@@ -432,6 +522,7 @@ def cmd_fetch_batch(args: argparse.Namespace) -> None:
             result.command = "fetch-batch"
             if args.max_tokens:
                 result = _apply_token_limit(result, args.max_tokens)
+            result.citation = _build_citation(result)
             emit(result.to_dict(), pretty=False)
 
     async def _run() -> None:
@@ -907,6 +998,14 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Fetch and extract content from top N results")
     p_search.add_argument("--fetch-concurrency", dest="fetch_concurrency", type=int, default=3)
     p_search.add_argument("--fetch-timeout", dest="fetch_timeout", type=int, default=20)
+    p_search.add_argument("--no-enrich", dest="no_enrich", action="store_true", default=False,
+                          help="Skip head-fetch enrichment for missing published_at/authors. Faster; sourcing may be incomplete.")
+    p_search.add_argument("--no-cite", dest="no_cite", action="store_true", default=False,
+                          help="Omit citations[] array and citation_index from output.")
+    p_search.add_argument("--enrich-concurrency", dest="enrich_concurrency", type=int, default=5,
+                          help="Max concurrent head-fetch requests for metadata enrichment (default: 5).")
+    p_search.add_argument("--enrich-timeout", dest="enrich_timeout", type=int, default=8,
+                          help="Per-request timeout in seconds for enrichment head-fetches (default: 8).")
     p_search.add_argument("--pretty", action="store_true")
     p_search.set_defaults(func=cmd_search)
 

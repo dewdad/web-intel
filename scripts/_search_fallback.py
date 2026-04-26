@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from _config import create_httpx_client, get_logger
-from _normalize import SearchResult, Timer
+from _normalize import SearchResult, Timer, normalize_date, extract_domain
 
 log = get_logger("search_fallback")
 
@@ -43,7 +43,7 @@ def search_ddgs(
             "engine": "ddgs",
             "engines": ["ddgs"],
             "score": 0,
-            "domain": "",
+            "domain": extract_domain(r.get("href", "")),
             "published_at": "",
             "category": "",
             "quality_score": 0.0,
@@ -89,8 +89,8 @@ def search_brave(
             "engine": "brave",
             "engines": ["brave"],
             "score": r.get("relevance_score", 0),
-            "domain": "",
-            "published_at": r.get("page_age", ""),
+            "domain": extract_domain(r.get("url", "")),
+            "published_at": normalize_date(r.get("page_age", "")),
             "category": "",
             "quality_score": 0.0,
         }

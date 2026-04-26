@@ -3,19 +3,11 @@ from __future__ import annotations
 import math
 import re
 from typing import Any
-from urllib.parse import urlparse
 
 from _config import SEARXNG_URL, SEARXNG_API_KEY, create_httpx_client, get_logger
-from _normalize import SearchResult, Timer
+from _normalize import SearchResult, Timer, normalize_date, extract_domain
 
 log = get_logger("searxng")
-
-
-def _extract_domain(url: str) -> str:
-    try:
-        return urlparse(url).netloc.lower().removeprefix("www.")
-    except Exception:
-        return ""
 
 
 def _compute_quality_score(result: dict, query: str) -> float:
@@ -92,8 +84,8 @@ def search(
             "engine": r.get("engine", ""),
             "engines": r.get("engines", []),
             "score": r.get("score", 0),
-            "domain": _extract_domain(r.get("url", "")),
-            "published_at": r.get("publishedDate", "") or r.get("published_date", ""),
+            "domain": extract_domain(r.get("url", "")),
+            "published_at": normalize_date(r.get("publishedDate", "") or r.get("published_date", "")),
             "category": r.get("category", ""),
         }
         for r in raw_results

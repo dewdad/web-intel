@@ -1,6 +1,6 @@
 # web-intel
 
-Web search, crawling, scraping, and content extraction for AI agents — routed through a single CLI.
+Web search, crawling, scraping, and content extraction for AI agents — routed through a single CLI + skill for any agent.
 
 ```bash
 bin/web-intel search "how does RLHF work"
@@ -10,6 +10,49 @@ bin/web-intel discover "https://docs.python.org" --enriched
 ```
 
 All output is JSON on stdout. Logs go to stderr only. Every command works immediately — no config required.
+
+---
+
+## Why web-intel?
+
+Most search tools give you results or a scraper — not both in one composable pipeline. web-intel covers the full research loop: search → fetch → extract → scrape → crawl → batch, with a consistent JSON envelope throughout.
+
+**One-shot research pipeline**
+
+```bash
+bin/web-intel search "LLM context window scaling" --fetch-top 3 --pretty
+```
+
+Returns ranked results *and* full extracted content in a single command. No scripting the loop yourself.
+
+**Zero-config degradation across three tiers**
+
+- Tier 1 (zero setup): `fetch`, `scrape`, `discover`, `fetch-batch` — Python deps auto-install on first run, no Docker needed.
+- Tier 2: `search` falls back automatically through SearXNG → Brave API → ddgs (multi-engine). Works without Docker.
+- Tier 3: JS-rendered pages via Crawl4AI/Chromium, only when you need it.
+
+**Token-budget controls for agent pipelines**
+
+`--max-tokens`, `--chunk-tokens`/`--chunk-index` (pagination), and `--relevant-to` (TF-IDF paragraph filter) are built into `fetch`. Long documents don't blow your context window.
+
+**Agent-native output contract**
+
+Every command emits a strict JSON envelope with `status`, `command`, `timing_ms`, `markdown`, and `confidence`. No parsing stderr, no ambiguous text. Downstream agents consume results directly.
+
+**Additional capabilities most tools lack**
+
+- `fetch --diff` — SHA256 content hashing with `changed: true/false/null` for page change monitoring across agent runs.
+- `fetch-batch` — rate-limited parallel fetch with `--concurrency` and per-domain `--domain-delay`; composes with Unix pipes.
+- `scrape --schema` — multi-field CSS extraction in one pass.
+
+**vs common alternatives**
+
+| Tool | Gap |
+|------|-----|
+| Built-in `WebSearch` | Search only, no full-content extraction, no token controls, only with Anthropic provider |
+| `exa` / `tavily` (MCP) | Search only, API-dependent, no scraping or batch |
+| `browser-tools` MCP | Single-page, no search, heavier setup |
+| `curl` + `jq` scripts | No JS rendering, no fallback chain, no token limits |
 
 ---
 

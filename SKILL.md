@@ -95,14 +95,25 @@ $SKILL_DIR/bin/web-intel setup --pretty    # auto-fix: install deps, start SearX
 ### `search` — Web search
 
 ```bash
-$SKILL_DIR/bin/web-intel search "query" [--engines google,brave] [--categories general] [--language en] [--time-range week] [--max-results 10] [--no-rerank] [--no-fallback] [--fetch-top N] [--fetch-concurrency 3] [--fetch-timeout 20]
+$SKILL_DIR/bin/web-intel search "query" [--engines google,brave] [--categories general] [--language en]
+  [--time-range week] [--max-results 10] [--no-rerank] [--no-fallback]
+  [--fetch-top N] [--fetch-concurrency 3] [--fetch-timeout 20]
+  [--no-enrich] [--enrich-concurrency 5] [--enrich-timeout 8]
+  [--no-cite]
 ```
 
-- `--fetch-top N`: Fetch and extract full content from the top N results (one-shot pipeline).
+- `--fetch-top N`: Fetch and extract full content from the top N results (one-shot pipeline). Also backfills `published_at`/`authors` from fetched content for free.
 - `--no-rerank`: Preserve SearXNG result ordering instead of reranking by `quality_score`.
 - `--no-fallback`: Fail immediately if SearXNG unavailable (skip ddgs/Brave fallbacks).
+- `--no-enrich`: Skip head-fetch enrichment for missing `published_at`/`authors`. Faster; sourcing may be incomplete.
+- `--no-cite`: Omit `citations[]` array and `citation_index` from output.
+- `--enrich-concurrency N`: Max concurrent enrichment head-fetches (default: 5).
+- `--enrich-timeout N`: Per-request enrichment timeout in seconds (default: 8).
 
-Result fields: `url`, `title`, `snippet`, `engine`, `engines[]`, `score`, `domain`, `published_at`, `quality_score`, `category`. Results are ranked by `quality_score` (term overlap + engine count + raw score).
+Result fields: `url`, `title`, `snippet`, `engine`, `engines[]`, `score`, `domain`, `published_at`, `authors`, `quality_score`, `category`, `citation_index`, `meta_enriched[]`, `meta_source`.
+
+Top-level: `citations[]` — always present (unless `--no-cite`), one entry per result:
+`"[N] Title by Author — domain (YYYY-MM-DD) url"` or `(date unknown)` when unavailable.
 
 `quality_score` accuracy: highest with SearXNG (all components active), lower with fallback backends (overlap-only for ddgs).
 
@@ -193,11 +204,11 @@ search: SearXNG ─[fail]─> Brave Search API ─[fail]─> [ddgs](https://gith
 
 Every command returns JSON with `status` (`ok`|`partial`|`failed`), `command`, `timing_ms`, and `error` (on failure). Empty fields omitted.
 
-- **fetch/crawl/extract**: `url`, `title`, `markdown`, `text`, `confidence`, `fetch_mode`, `extract_mode`; optional `char_count`, `truncated`, `chunk_index`, `chunk_count`, `chunk_tokens`, `changed`, `current_hash`, `previous_hash`
+- **fetch/crawl/extract**: `url`, `title`, `markdown`, `text`, `confidence`, `fetch_mode`, `extract_mode`; optional `char_count`, `truncated`, `chunk_index`, `chunk_count`, `chunk_tokens`, `changed`, `current_hash`, `previous_hash`. Always includes `citation` object (url, title, site_name, published_at, authors, citation_text) and source attribution appended to `markdown`.
 - **scrape**: above + `tables` (3D array) or selector results or `--schema` JSON in `text`/`markdown`
-- **search**: `query`, `results[]` (url, title, snippet, engine, engines[], score, domain, published_at, quality_score), `total_results`, `number_of_results`
+- **search**: `query`, `results[]` (url, title, snippet, engine, engines[], score, domain, published_at, authors, quality_score, category, citation_index, meta_enriched[], meta_source), `total_results`, `number_of_results`, `citations[]`
 - **discover**: `base_url`, `mode`, `urls[]`, `url_entries[]` (with depth/lastmod/priority), `total_urls`
-- **fetch-batch**: NDJSON (one envelope per URL on stdout)
+- **fetch-batch**: NDJSON (one envelope per URL on stdout), each with `citation` object
 - **doctor**: `ready_commands[]`, `search_backend`, `checks[]` with status/hint per dependency
 
 Full schema: `references/output-schema.md`
