@@ -291,10 +291,14 @@ def _post_process_result(result: "WebResult", args: argparse.Namespace) -> "WebR
             result.text = filter_relevant_paragraphs(result.text, relevant_to, top_n=relevant_top)
 
     diff = getattr(args, "diff", False)
-    if diff and result.status == "ok":
+    no_cache = getattr(args, "no_cache", False)
+    if (diff or no_cache) and result.status == "ok":
         from _page_cache import check_and_update
         changed, previous_hash, current_hash = check_and_update(
-            result.url, result.markdown or result.text or "", result.title
+            result.url,
+            result.markdown or result.text or "",
+            result.title,
+            no_cache=no_cache,
         )
         result.changed = changed
         result.previous_hash = previous_hash
@@ -983,6 +987,13 @@ def cmd_setup(args: argparse.Namespace) -> None:
                 }
             )
 
+    if getattr(args, "clear_cache", False):
+        from _deps import clear_stamp_cache
+        from _page_cache import clear_page_cache
+        clear_stamp_cache()
+        clear_page_cache()
+        steps.append({"step": "clear_cache", "status": "ok", "cleared": ["dep_stamps", "page_cache"]})
+
     emit(
         {
             "status": "ok"
@@ -1080,6 +1091,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_fetch.add_argument("--wait-for-delay", dest="wait_for_delay", type=float, default=2.0)
     p_fetch.add_argument("--diff", action="store_true",
                          help="Compare content to cached version and report changes")
+    p_fetch.add_argument(
+        "--no-cache",
+        dest="no_cache",
+        action="store_true",
+        default=False,
+        help="Skip reading/writing the content diff cache for this request.",
+    )
     p_fetch.add_argument("--pretty", action="store_true")
     p_fetch.set_defaults(func=cmd_fetch)
 
@@ -1166,6 +1184,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["core", "all"],
         default="core",
         help="core=fetch/extract/scrape/discover, all=+search+crawl",
+    )
+    p_setup.add_argument(
+        "--clear-cache",
+        dest="clear_cache",
+        action="store_true",
+        default=False,
+        help="Clear dep-stamp cache and page-diff cache, forcing re-check on next run.",
     )
     p_setup.add_argument("--pretty", action="store_true")
     p_setup.set_defaults(func=cmd_setup)

@@ -26,7 +26,15 @@ def _save(cache: dict) -> None:
         pass
 
 
-def check_and_update(url: str, content: str, title: str = "") -> tuple[Optional[bool], str, str]:
+def check_and_update(
+    url: str,
+    content: str,
+    title: str = "",
+    *,
+    no_cache: bool = False,
+) -> tuple[Optional[bool], str, str]:
+    if no_cache:
+        return None, "", ""
     current_hash = "sha256:" + hashlib.sha256(content.encode()).hexdigest()[:16]
     cache = _load()
     entry = cache.get(url)
@@ -39,3 +47,11 @@ def check_and_update(url: str, content: str, title: str = "") -> tuple[Optional[
     }
     _save(cache)
     return changed, previous_hash, current_hash
+
+
+def clear_page_cache() -> None:
+    try:
+        if _CACHE_FILE.exists():
+            _CACHE_FILE.unlink()
+    except Exception:
+        pass

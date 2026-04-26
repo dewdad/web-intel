@@ -43,3 +43,20 @@ def test_cache_file_created(tmp_path):
     cache_file = _make_temp_cache(tmp_path)
     page_cache_module.check_and_update("https://example.com/file-test", "data")
     assert cache_file.exists()
+
+
+def test_no_cache_skips_read_and_write(tmp_path, monkeypatch):
+    """When no_cache=True, check_and_update should not read or write."""
+    _make_temp_cache(tmp_path)
+    # Pre-populate a cache entry
+    page_cache_module.check_and_update("https://example.com", "initial content", "Title")
+    # Now call with no_cache — should return (None, "", "") without touching cache
+    changed, prev, curr = page_cache_module.check_and_update(
+        "https://example.com", "new content", "Title", no_cache=True
+    )
+    assert changed is None
+    assert prev == ""
+    assert curr == ""
+    # Cache entry should still be the original (not updated)
+    changed2, _, curr2 = page_cache_module.check_and_update("https://example.com", "new content", "Title")
+    assert changed2 is True  # old hash vs new content = changed

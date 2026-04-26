@@ -34,3 +34,8 @@ def test_stamp_path_differs_for_different_deps():
     path1 = _stamp_path(["httpx"])
     path2 = _stamp_path(["trafilatura"])
     assert path1 != path2
+
+
+def test_clear_stamp_cache_callable():
+    from _deps import clear_stamp_cache
+    clear_stamp_cache()
