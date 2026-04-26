@@ -81,6 +81,7 @@ async def _crawl_local(
         title=getattr(result, "title", "") or "",
         markdown=result.markdown or "",
         text=getattr(result, "extracted_content", "") or result.markdown or "",
+        html=getattr(result, "html", "") or "",
         links=[
             {"url": l.get("href", ""), "text": l.get("text", "")}
             for l in (
@@ -222,6 +223,7 @@ async def _crawl_docker(
         title=(result_data.get("metadata") or {}).get("title", ""),
         markdown=markdown,
         text=result_data.get("extracted_content", "") or markdown,
+        html=result_data.get("html", "") or "",
         links=links,
         images=images,
         fetch_mode="crawl4ai",
@@ -285,4 +287,4 @@ def get_raw_html(
         headless=headless,
         use_docker=use_docker,
     )
-    return result.text or result.markdown or ""
+    return result.html or result.text or result.markdown or ""

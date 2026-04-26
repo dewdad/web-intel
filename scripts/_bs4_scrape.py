@@ -15,7 +15,6 @@ def scrape_selector(
     url: str = "",
     attribute: Optional[str] = None,
 ) -> WebResult:
-    """Extract elements matching a CSS selector from HTML."""
     from bs4 import BeautifulSoup
 
     with Timer() as t:
@@ -63,7 +62,6 @@ def scrape_selector(
 
 
 def scrape_tables(html: str, *, url: str = "") -> WebResult:
-    """Extract all HTML tables as structured JSON arrays."""
     from bs4 import BeautifulSoup
 
     with Timer() as t:
@@ -122,7 +120,6 @@ def scrape_tables(html: str, *, url: str = "") -> WebResult:
 
 
 def scrape_lists(html: str, *, url: str = "") -> WebResult:
-    """Extract all ordered and unordered lists from HTML."""
     from bs4 import BeautifulSoup
 
     with Timer() as t:
@@ -169,5 +166,46 @@ def scrape_lists(html: str, *, url: str = "") -> WebResult:
         markdown="\n\n".join(markdown_parts),
         extract_mode="bs4",
         confidence=0.9,
+        timing_ms=t.elapsed_ms,
+    )
+
+
+def scrape_schema(html: str, schema: dict, *, url: str = "") -> WebResult:
+    from bs4 import BeautifulSoup
+    import json as _json
+
+    with Timer() as t:
+        try:
+            soup = BeautifulSoup(html, "lxml")
+            extracted: dict[str, Any] = {}
+
+            for field, spec in schema.items():
+                if isinstance(spec, str):
+                    el = soup.select_one(spec)
+                    extracted[field] = el.get_text(strip=True) if el else None
+                elif isinstance(spec, dict):
+                    selector = spec.get("selector", "")
+                    attribute = spec.get("attribute")
+                    multiple = spec.get("multiple", False)
+                    elements = soup.select(selector) if multiple else [soup.select_one(selector)]
+                    elements = [e for e in elements if e is not None]
+                    results_for_field = []
+                    for el in elements:
+                        if attribute:
+                            results_for_field.append(el.get(attribute, ""))
+                        else:
+                            results_for_field.append(el.get_text(strip=True))
+                    extracted[field] = results_for_field if multiple else (results_for_field[0] if results_for_field else None)
+        except Exception as exc:
+            return WebResult(url=url, status="failed", extract_mode="bs4",
+                             error=f"Schema extraction failed: {exc}", timing_ms=t.elapsed_ms)
+
+    as_json = _json.dumps(extracted, ensure_ascii=False, indent=2)
+    return WebResult(
+        url=url,
+        text=as_json,
+        markdown=f"```json\n{as_json}\n```",
+        extract_mode="bs4",
+        confidence=0.9 if any(v is not None for v in extracted.values()) else 0.0,
         timing_ms=t.elapsed_ms,
     )

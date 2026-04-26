@@ -16,13 +16,14 @@ _IMPORT_MAP: dict[str, str] = {
     "crawl4ai": "crawl4ai",
     "trafilatura": "trafilatura",
     "lxml": "lxml",
+    "ddgs": "ddgs",
 }
 
 CORE_DEPS = ["httpx[http2]", "httpx-retries", "trafilatura", "beautifulsoup4", "lxml"]
 CRAWL_DEPS = ["crawl4ai"]
 
 _COMMAND_DEPS: dict[str, list[str]] = {
-    "search": CORE_DEPS,
+    "search": CORE_DEPS + ["ddgs"],
     "fetch": CORE_DEPS,
     "crawl": CORE_DEPS + CRAWL_DEPS,
     "scrape": CORE_DEPS,

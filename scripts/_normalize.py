@@ -11,8 +11,6 @@ from typing import Any, Optional
 
 @dataclass
 class WebResult:
-    """Single-page result envelope."""
-
     url: str = ""
     canonical_url: str = ""
     title: str = ""
@@ -35,9 +33,21 @@ class WebResult:
     status: str = "ok"
     command: str = ""
     error: Optional[str] = None
+    html: str = ""
+    char_count: int = 0
+    truncated: bool = False
+    chunk_index: int = 0
+    chunk_count: int = 0
+    chunk_tokens: int = 0
+    current_hash: str = ""
+    previous_hash: str = ""
+    changed: Optional[bool] = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
+        d.pop("html", None)
+        if d.get("changed") is None:
+            d.pop("changed", None)
         d = {
             k: v
             for k, v in d.items()
@@ -52,11 +62,10 @@ class WebResult:
 
 @dataclass
 class SearchResult:
-    """Search results envelope."""
-
     query: str = ""
     results: list[dict[str, Any]] = field(default_factory=list)
     total_results: int = 0
+    number_of_results: int = 0
     timing_ms: int = 0
     status: str = "ok"
     command: str = "search"
@@ -71,11 +80,10 @@ class SearchResult:
 
 @dataclass
 class DiscoverResult:
-    """Site discovery envelope."""
-
     base_url: str = ""
     mode: str = "sitemap"
     urls: list[str] = field(default_factory=list)
+    url_entries: list[dict] = field(default_factory=list)
     total_urls: int = 0
     timing_ms: int = 0
     status: str = "ok"

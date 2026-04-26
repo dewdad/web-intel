@@ -12,6 +12,9 @@ _SKILL_DIR = _SCRIPTS_DIR.parent
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from _normalize import emit, emit_error, Timer
+from _config import get_logger
+
+log = get_logger("web")
 
 
 def _crawl4ai_docker_available() -> bool:
@@ -26,6 +29,36 @@ def _crawl4ai_docker_available() -> bool:
         return False
 
 
+def _fetch_parallel(urls: list[str], *, concurrency: int, timeout: int) -> list[dict]:
+    import asyncio
+    from _trafilatura_extract import fetch_and_extract
+
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _fetch_one(url: str) -> dict:
+        async with sem:
+            loop = asyncio.get_event_loop()
+            try:
+                result = await loop.run_in_executor(
+                    None, lambda: fetch_and_extract(url, timeout=timeout)
+                )
+                return {
+                    "status": result.status,
+                    "markdown": result.markdown,
+                    "confidence": result.confidence,
+                    "timing_ms": result.timing_ms,
+                    "fetch_mode": result.fetch_mode,
+                    "error": result.error,
+                }
+            except Exception as exc:
+                return {"status": "failed", "error": str(exc)}
+
+    async def _run_all() -> list[dict]:
+        return await asyncio.gather(*[_fetch_one(u) for u in urls])
+
+    return asyncio.run(_run_all())
+
+
 def cmd_search(args: argparse.Namespace) -> None:
     from _searxng import search
 
@@ -37,7 +70,38 @@ def cmd_search(args: argparse.Namespace) -> None:
         time_range=args.time_range,
         max_results=args.max_results,
         pageno=args.pageno,
+        no_rerank=getattr(args, "no_rerank", False),
     )
+
+    if result.status == "failed" and not getattr(args, "no_fallback", False):
+        import os
+        from _search_fallback import search_brave, search_ddgs
+
+        brave_key = os.environ.get("BRAVE_API_KEY")
+        if brave_key:
+            log.info("SearXNG unavailable, trying Brave Search API fallback")
+            result = search_brave(args.query, api_key=brave_key, max_results=args.max_results)
+
+        if result.status == "failed":
+            log.info("SearXNG unavailable, trying ddgs multi-engine fallback")
+            result = search_ddgs(args.query, max_results=args.max_results)
+
+        if result.status != "failed":
+            result.error = (result.error or "") + " [SearXNG unavailable, used fallback]"
+
+    fetch_top = getattr(args, "fetch_top", 0)
+    if fetch_top > 0 and result.status != "failed" and result.results:
+        top_urls = [r["url"] for r in result.results[:fetch_top] if r.get("url")]
+        fetched = _fetch_parallel(
+            top_urls,
+            concurrency=getattr(args, "fetch_concurrency", 3),
+            timeout=getattr(args, "fetch_timeout", 20),
+        )
+        for r, content in zip(result.results[:fetch_top], fetched):
+            if content.get("error") is None:
+                content.pop("error", None)
+            r["content"] = content
+
     emit(result.to_dict(), pretty=args.pretty)
 
 
@@ -48,6 +112,84 @@ _FETCH_FALLBACK_SIGNALS = (
     "empty content",
     "requires javascript",
 )
+
+
+def _apply_token_limit(result: "WebResult", max_tokens: int) -> "WebResult":
+    if max_tokens <= 0:
+        return result
+    char_limit = max_tokens * 4
+    result.char_count = len(result.markdown or result.text or "")
+    if result.markdown and len(result.markdown) > char_limit:
+        result.markdown = result.markdown[:char_limit] + "\n\n[...truncated]"
+        result.truncated = True
+    if result.text and len(result.text) > char_limit:
+        result.text = result.text[:char_limit] + "\n[...truncated]"
+        result.truncated = True
+    return result
+
+
+def _apply_chunking(result: "WebResult", chunk_tokens: int, chunk_index: int) -> "WebResult":
+    if chunk_tokens <= 0:
+        return result
+    char_size = chunk_tokens * 4
+    content = result.markdown or result.text or ""
+    if not content:
+        return result
+
+    chunks: list[str] = []
+    remaining = content
+    while remaining:
+        if len(remaining) <= char_size:
+            chunks.append(remaining)
+            break
+        boundary = remaining.rfind("\n\n", 0, char_size)
+        if boundary == -1 or boundary < char_size // 2:
+            boundary = char_size
+        chunks.append(remaining[:boundary].strip())
+        remaining = remaining[boundary:].strip()
+
+    result.chunk_count = len(chunks)
+    result.chunk_tokens = chunk_tokens
+    safe_index = max(0, min(chunk_index, len(chunks) - 1))
+    result.chunk_index = safe_index
+
+    chunk_content = chunks[safe_index] if chunks else ""
+    if result.markdown:
+        result.markdown = chunk_content
+    if result.text:
+        result.text = chunk_content
+    return result
+
+
+def _post_process_result(result: "WebResult", args: argparse.Namespace) -> "WebResult":
+    chunk_tokens = getattr(args, "chunk_tokens", 0)
+    chunk_index = getattr(args, "chunk_index", 0)
+    max_tokens = getattr(args, "max_tokens", 0)
+
+    if chunk_tokens > 0:
+        result = _apply_chunking(result, chunk_tokens, chunk_index)
+    elif max_tokens > 0:
+        result = _apply_token_limit(result, max_tokens)
+
+    relevant_to = getattr(args, "relevant_to", "")
+    if relevant_to and result.markdown:
+        from _relevance import filter_relevant_paragraphs
+        relevant_top = getattr(args, "relevant_top", 10)
+        result.markdown = filter_relevant_paragraphs(result.markdown, relevant_to, top_n=relevant_top)
+        if result.text:
+            result.text = filter_relevant_paragraphs(result.text, relevant_to, top_n=relevant_top)
+
+    diff = getattr(args, "diff", False)
+    if diff and result.status == "ok":
+        from _page_cache import check_and_update
+        changed, previous_hash, current_hash = check_and_update(
+            result.url, result.markdown or result.text or "", result.title
+        )
+        result.changed = changed
+        result.previous_hash = previous_hash
+        result.current_hash = current_hash
+
+    return result
 
 
 def _should_fallback_to_crawl(result: "WebResult") -> bool:
@@ -88,7 +230,24 @@ def cmd_fetch(args: argparse.Namespace) -> None:
             if crawl_result.status == "ok" and crawl_result.markdown:
                 result = crawl_result
 
+    if getattr(args, "wait_for_text", "") and result.status == "ok":
+        import time
+        target = args.wait_for_text.lower()
+        for _ in range(getattr(args, "wait_for_retries", 3)):
+            content = (result.markdown or result.text or "").lower()
+            if target in content:
+                break
+            time.sleep(getattr(args, "wait_for_delay", 2.0))
+            result = fetch_and_extract(
+                args.url,
+                include_tables=args.include_tables,
+                include_links=args.include_links,
+                output_format=args.output_format,
+                timeout=args.timeout,
+            )
+
     result.command = "fetch"
+    result = _post_process_result(result, args)
     emit(result.to_dict(), pretty=args.pretty)
 
 
@@ -107,12 +266,13 @@ def cmd_crawl(args: argparse.Namespace) -> None:
         use_docker=use_docker,
     )
     result.command = "crawl"
+    result = _post_process_result(result, args)
     emit(result.to_dict(), pretty=args.pretty)
 
 
 def cmd_scrape(args: argparse.Namespace) -> None:
     from _httpx_fetch import fetch
-    from _bs4_scrape import scrape_selector, scrape_tables, scrape_lists
+    from _bs4_scrape import scrape_selector, scrape_tables, scrape_lists, scrape_schema
 
     use_crawl4ai = args.use_crawl4ai or _crawl4ai_docker_available()
 
@@ -142,7 +302,16 @@ def cmd_scrape(args: argparse.Namespace) -> None:
         emit_error("scrape", "Empty response from server", pretty=args.pretty)
         return
 
-    if args.table:
+    schema_str = getattr(args, "schema", "")
+    if schema_str:
+        import json as _json
+        try:
+            schema = _json.loads(schema_str)
+        except _json.JSONDecodeError as exc:
+            emit_error("scrape", f"Invalid --schema JSON: {exc}", pretty=args.pretty)
+            return
+        result = scrape_schema(html, schema, url=args.url)
+    elif args.table:
         result = scrape_tables(html, url=args.url)
     elif args.list:
         result = scrape_lists(html, url=args.url)
@@ -152,7 +321,7 @@ def cmd_scrape(args: argparse.Namespace) -> None:
         )
     else:
         emit_error(
-            "scrape", "Provide --selector, --table, or --list", pretty=args.pretty
+            "scrape", "Provide --selector, --table, --list, or --schema", pretty=args.pretty
         )
         return
 
@@ -182,18 +351,24 @@ def cmd_extract(args: argparse.Namespace) -> None:
     )
     result.command = "extract"
     result.fetch_mode = "local"
+    result = _post_process_result(result, args)
     emit(result.to_dict(), pretty=args.pretty)
 
 
 def cmd_discover(args: argparse.Namespace) -> None:
-    from _trafilatura_extract import discover_sitemap, discover_crawl
+    from _trafilatura_extract import discover_sitemap, discover_sitemap_enriched, discover_crawl
+
+    enriched = getattr(args, "enriched", False)
 
     if args.mode in ("sitemap", "both"):
-        result = discover_sitemap(
-            args.url,
-            target_lang=args.language,
-            max_urls=args.max_urls,
-        )
+        if enriched:
+            result = discover_sitemap_enriched(args.url, max_urls=args.max_urls)
+        else:
+            result = discover_sitemap(
+                args.url,
+                target_lang=args.language,
+                max_urls=args.max_urls,
+            )
         if args.mode == "both":
             crawl_result = discover_crawl(
                 args.url,
@@ -205,6 +380,9 @@ def cmd_discover(args: argparse.Namespace) -> None:
                 if u not in seen:
                     result.urls.append(u)
                     seen.add(u)
+            for entry in crawl_result.url_entries:
+                if entry["url"] not in {e["url"] for e in result.url_entries}:
+                    result.url_entries.append(entry)
             result.total_urls = len(result.urls)
             result.mode = "both"
             result.timing_ms += crawl_result.timing_ms
@@ -218,9 +396,53 @@ def cmd_discover(args: argparse.Namespace) -> None:
     emit(result.to_dict(), pretty=args.pretty)
 
 
+def cmd_fetch_batch(args: argparse.Namespace) -> None:
+    import asyncio
+    from pathlib import Path as _Path
+    from urllib.parse import urlparse as _urlparse
+    import time as _time
+    from _trafilatura_extract import fetch_and_extract
+
+    if args.url_file:
+        urls = _Path(args.url_file).read_text().splitlines()
+    else:
+        urls = sys.stdin.read().splitlines()
+    urls = [u.strip() for u in urls if u.strip()]
+
+    if not urls:
+        emit_error("fetch-batch", "No URLs provided", pretty=args.pretty)
+        return
+
+    sem = asyncio.Semaphore(args.concurrency)
+    domain_last: dict[str, float] = {}
+
+    async def _fetch_one(url: str) -> None:
+        async with sem:
+            domain = _urlparse(url).netloc
+            if args.domain_delay > 0 and domain in domain_last:
+                wait = args.domain_delay - (_time.monotonic() - domain_last[domain])
+                if wait > 0:
+                    await asyncio.sleep(wait)
+            domain_last[domain] = _time.monotonic()
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, lambda: fetch_and_extract(url, timeout=args.timeout)
+            )
+            result.command = "fetch-batch"
+            if args.max_tokens:
+                result = _apply_token_limit(result, args.max_tokens)
+            emit(result.to_dict(), pretty=False)
+
+    async def _run() -> None:
+        await asyncio.gather(*[_fetch_one(u) for u in urls])
+
+    asyncio.run(_run())
+
+
 def cmd_doctor(args: argparse.Namespace) -> None:
-    """Check all dependencies and services. Emits JSON diagnostic."""
     import importlib
+    import os
     import shutil
     import subprocess
 
@@ -340,6 +562,25 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         }
     )
 
+    brave_key = os.environ.get("BRAVE_API_KEY")
+    checks.append({
+        "check": "search_fallback_brave",
+        "status": "ok" if brave_key else "optional",
+        "hint": "" if brave_key else "Set BRAVE_API_KEY in .env for a higher-quality keyed search fallback",
+    })
+
+    ddgs_ok = False
+    try:
+        importlib.import_module("ddgs")
+        ddgs_ok = True
+    except ImportError:
+        pass
+    checks.append({
+        "check": "search_fallback_ddgs",
+        "status": "ok" if ddgs_ok else "not_installed",
+        "hint": "" if ddgs_ok else "Run: pip install ddgs  (zero-config multi-engine fallback)",
+    })
+
     # 7. Crawl4AI Docker container running
     crawl4ai_docker_ok = False
     if docker_ok:
@@ -458,18 +699,31 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     )
     if core_deps_ok:
         ready_tiers.extend(["fetch", "extract", "discover", "scrape"])
-    if searxng_api_ok and core_deps_ok:
+    search_ready = (
+        (searxng_api_ok and core_deps_ok)
+        or (brave_key and core_deps_ok)
+        or (ddgs_ok and core_deps_ok)
+    )
+    if search_ready:
         ready_tiers.append("search")
     if crawl4ai_api_ok and core_deps_ok:
         ready_tiers.append("crawl")
     elif crawl4ai_browser_ok and core_deps_ok:
         ready_tiers.append("crawl")
 
+    search_backend = (
+        "searxng" if searxng_api_ok
+        else "brave" if brave_key
+        else "ddgs" if ddgs_ok
+        else "none"
+    )
+
     emit(
         {
             "status": "ok" if all_ok else "partial",
             "command": "doctor",
             "skill_dir": str(_SKILL_DIR),
+            "search_backend": search_backend,
             "ready_commands": ready_tiers,
             "checks": [{k: v for k, v in c.items() if v} for c in checks],
         },
@@ -645,6 +899,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--time-range", dest="time_range", default="")
     p_search.add_argument("--max-results", dest="max_results", type=int, default=10)
     p_search.add_argument("--pageno", type=int, default=1)
+    p_search.add_argument("--no-rerank", dest="no_rerank", action="store_true",
+                          help="Preserve SearXNG result order, don't rerank by quality_score")
+    p_search.add_argument("--no-fallback", dest="no_fallback", action="store_true",
+                          help="Fail immediately if SearXNG unavailable, skip fallback backends")
+    p_search.add_argument("--fetch-top", dest="fetch_top", type=int, default=0,
+                          help="Fetch and extract content from top N results")
+    p_search.add_argument("--fetch-concurrency", dest="fetch_concurrency", type=int, default=3)
+    p_search.add_argument("--fetch-timeout", dest="fetch_timeout", type=int, default=20)
     p_search.add_argument("--pretty", action="store_true")
     p_search.set_defaults(func=cmd_search)
 
@@ -664,6 +926,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-fallback-crawl", dest="fallback_crawl", action="store_false", default=True
     )
     p_fetch.add_argument("--timeout", type=int, default=30)
+    p_fetch.add_argument("--max-tokens", dest="max_tokens", type=int, default=0,
+                         help="Truncate markdown/text to approximately N tokens (1 token ≈ 4 chars)")
+    p_fetch.add_argument("--chunk-tokens", dest="chunk_tokens", type=int, default=0,
+                         help="Split content into chunks of ~N tokens each")
+    p_fetch.add_argument("--chunk-index", dest="chunk_index", type=int, default=0,
+                         help="Which chunk to return (0-based). Requires --chunk-tokens.")
+    p_fetch.add_argument("--relevant-to", dest="relevant_to", default="",
+                         help="Filter content to paragraphs most relevant to this query")
+    p_fetch.add_argument("--relevant-top", dest="relevant_top", type=int, default=10)
+    p_fetch.add_argument("--wait-for-text", dest="wait_for_text", default="",
+                         help="Retry httpx fetch until this text appears (static pages only; use crawl for JS)")
+    p_fetch.add_argument("--wait-for-retries", dest="wait_for_retries", type=int, default=3)
+    p_fetch.add_argument("--wait-for-delay", dest="wait_for_delay", type=float, default=2.0)
+    p_fetch.add_argument("--diff", action="store_true",
+                         help="Compare content to cached version and report changes")
     p_fetch.add_argument("--pretty", action="store_true")
     p_fetch.set_defaults(func=cmd_fetch)
 
@@ -678,6 +955,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-headless", dest="headless", action="store_false", default=True
     )
     p_crawl.add_argument("--docker", action="store_true")
+    p_crawl.add_argument("--max-tokens", dest="max_tokens", type=int, default=0)
+    p_crawl.add_argument("--chunk-tokens", dest="chunk_tokens", type=int, default=0)
+    p_crawl.add_argument("--chunk-index", dest="chunk_index", type=int, default=0)
+    p_crawl.add_argument("--relevant-to", dest="relevant_to", default="")
+    p_crawl.add_argument("--relevant-top", dest="relevant_top", type=int, default=10)
     p_crawl.add_argument("--pretty", action="store_true")
     p_crawl.set_defaults(func=cmd_crawl)
 
@@ -687,6 +969,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_scrape.add_argument("--attribute")
     p_scrape.add_argument("--table", action="store_true")
     p_scrape.add_argument("--list", action="store_true")
+    p_scrape.add_argument("--schema", default="",
+                          help='JSON schema: {"field": "css-selector", ...}')
     p_scrape.add_argument("--use-crawl4ai", action="store_true")
     p_scrape.add_argument("--timeout", type=int, default=60)
     p_scrape.add_argument("--pretty", action="store_true")
@@ -699,6 +983,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_extract.add_argument("--include-tables", action="store_true")
     p_extract.add_argument("--include-links", action="store_true")
     p_extract.add_argument("--output-format", dest="output_format", default="markdown")
+    p_extract.add_argument("--max-tokens", dest="max_tokens", type=int, default=0)
+    p_extract.add_argument("--chunk-tokens", dest="chunk_tokens", type=int, default=0)
+    p_extract.add_argument("--chunk-index", dest="chunk_index", type=int, default=0)
+    p_extract.add_argument("--relevant-to", dest="relevant_to", default="")
+    p_extract.add_argument("--relevant-top", dest="relevant_top", type=int, default=10)
     p_extract.add_argument("--pretty", action="store_true")
     p_extract.set_defaults(func=cmd_extract)
 
@@ -709,8 +998,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_discover.add_argument("--max-urls", dest="max_urls", type=int, default=100)
     p_discover.add_argument("--language")
+    p_discover.add_argument("--enriched", action="store_true",
+                            help="Parse sitemap XML directly for lastmod/changefreq/priority metadata")
     p_discover.add_argument("--pretty", action="store_true")
     p_discover.set_defaults(func=cmd_discover)
+
+    p_batch = sub.add_parser("fetch-batch", help="Batch fetch URLs from stdin or file (NDJSON output)")
+    p_batch.add_argument("--url-file", dest="url_file", default="")
+    p_batch.add_argument("--concurrency", type=int, default=3)
+    p_batch.add_argument("--timeout", type=int, default=20)
+    p_batch.add_argument("--max-tokens", dest="max_tokens", type=int, default=0)
+    p_batch.add_argument("--domain-delay", dest="domain_delay", type=float, default=0.0,
+                         help="Minimum seconds between requests to the same domain (recommended: 1.0)")
+    p_batch.add_argument("--include-tables", action="store_true")
+    p_batch.add_argument("--include-links", action="store_true")
+    p_batch.add_argument("--pretty", action="store_true")
+    p_batch.set_defaults(func=cmd_fetch_batch)
 
     p_doctor = sub.add_parser("doctor", help="Check all dependencies and services")
     p_doctor.add_argument("--pretty", action="store_true")
@@ -741,7 +1044,12 @@ def main() -> None:
         dep_key = args.command
         if args.command == "scrape" and getattr(args, "use_crawl4ai", False):
             dep_key = "scrape-crawl4ai"
+        elif args.command == "fetch-batch":
+            dep_key = "fetch"
         ensure_deps(dep_key)
+
+        if args.command == "search" and getattr(args, "fetch_top", 0) > 0:
+            ensure_deps("fetch")
 
     try:
         args.func(args)

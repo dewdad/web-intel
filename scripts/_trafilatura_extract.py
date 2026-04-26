@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from _config import get_logger
 from _normalize import WebResult, DiscoverResult, Timer
 
 log = get_logger("trafilatura")
+
+
+def _markdown_to_text(md: str) -> str:
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', md)
+    text = re.sub(r'[#*_`~>|]', '', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 
 def extract_from_html(
@@ -21,9 +29,9 @@ def extract_from_html(
     deduplicate: bool = True,
     output_format: str = "markdown",
 ) -> WebResult:
-    """Extract content from HTML string using Trafilatura."""
     import trafilatura
 
+    html_len = len(html)
     with Timer() as t:
         try:
             extracted = trafilatura.extract(
@@ -36,34 +44,9 @@ def extract_from_html(
                 favor_precision=favor_precision,
                 favor_recall=favor_recall,
                 deduplicate=deduplicate,
-                output_format="txt",
+                output_format="markdown",
             )
 
-            markdown_content = ""
-            if output_format == "markdown":
-                markdown_content = (
-                    trafilatura.extract(
-                        html,
-                        url=url or None,
-                        include_tables=include_tables,
-                        include_links=include_links,
-                        include_images=include_images,
-                        include_comments=include_comments,
-                        favor_precision=favor_precision,
-                        favor_recall=favor_recall,
-                        deduplicate=deduplicate,
-                        output_format="markdown",
-                    )
-                    or ""
-                )
-
-            metadata = trafilatura.extract(
-                html,
-                url=url or None,
-                output_format="xmltei",
-                with_metadata=True,
-                only_with_metadata=False,
-            )
             meta = _parse_metadata(html, url)
 
         except Exception as exc:
@@ -76,7 +59,7 @@ def extract_from_html(
                 timing_ms=t.elapsed_ms,
             )
 
-    if not extracted and not markdown_content:
+    if not extracted:
         return WebResult(
             url=url,
             status="partial",
@@ -86,6 +69,11 @@ def extract_from_html(
             timing_ms=t.elapsed_ms,
         )
 
+    markdown_content = extracted if output_format == "markdown" else ""
+    text_content = _markdown_to_text(extracted) if extracted else ""
+    extracted_len = len(extracted)
+    confidence = min((extracted_len / max(html_len, 1)) * 5, 1.0) if extracted_len else 0.0
+
     return WebResult(
         url=url,
         canonical_url=meta.get("canonical_url", ""),
@@ -94,10 +82,10 @@ def extract_from_html(
         published_at=meta.get("date", ""),
         authors=meta.get("authors", []),
         language=meta.get("language", ""),
-        markdown=markdown_content or extracted or "",
-        text=extracted or "",
+        markdown=markdown_content or text_content,
+        text=text_content,
         extract_mode="trafilatura",
-        confidence=0.85 if extracted else 0.0,
+        confidence=confidence,
         timing_ms=t.elapsed_ms,
     )
 
@@ -197,37 +185,98 @@ def discover_sitemap(
     )
 
 
+def discover_sitemap_enriched(url: str, *, max_urls: int = 100) -> DiscoverResult:
+    import httpx
+    import xml.etree.ElementTree as ET
+    from urllib.parse import urljoin
+
+    candidates = [
+        urljoin(url, "/sitemap.xml"),
+        urljoin(url, "/sitemap_index.xml"),
+        urljoin(url, "/sitemap.gz"),
+    ]
+    entries = []
+    ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+
+    for sitemap_url in candidates:
+        try:
+            resp = httpx.get(sitemap_url, timeout=10, follow_redirects=True)
+            resp.raise_for_status()
+            root = ET.fromstring(resp.content)
+            for url_el in root.findall(".//sm:url", ns)[:max_urls]:
+                loc = url_el.findtext("sm:loc", namespaces=ns) or ""
+                if not loc:
+                    continue
+                entry: dict = {"url": loc}
+                for f in ("lastmod", "changefreq", "priority"):
+                    val = url_el.findtext(f"sm:{f}", namespaces=ns)
+                    if val:
+                        entry[f] = val
+                entries.append(entry)
+            if entries:
+                break
+        except Exception:
+            continue
+
+    return DiscoverResult(
+        base_url=url,
+        mode="sitemap",
+        urls=[e["url"] for e in entries],
+        url_entries=entries,
+        total_urls=len(entries),
+    )
+
+
 def discover_crawl(
     url: str,
     *,
     max_urls: int = 100,
     language: Optional[str] = None,
 ) -> DiscoverResult:
-    from trafilatura.spider import focused_crawler
+    from _httpx_fetch import fetch
+    from urllib.parse import urljoin, urlparse
+
+    base_domain = urlparse(url).netloc
+    visited: set[str] = set()
+    queue: list[tuple[str, int]] = [(url, 0)]
+    entries: list[dict] = []
 
     with Timer() as t:
-        try:
-            known, _visited = focused_crawler(
-                url,
-                max_seen_urls=max_urls,
-                max_known_urls=max_urls * 5,
-                lang=language,
-            )
-            urls = (known or [])[:max_urls]
-        except Exception as exc:
-            log.error("Focused crawl failed for %s: %s", url, exc)
-            return DiscoverResult(
-                base_url=url,
-                mode="crawl",
-                status="failed",
-                error=f"Focused crawl failed: {exc}",
-                timing_ms=t.elapsed_ms,
-            )
+        while queue and len(entries) < max_urls:
+            current_url, depth = queue.pop(0)
+            if current_url in visited:
+                continue
+            visited.add(current_url)
+
+            try:
+                html, _, _ = fetch(current_url, timeout=10)
+            except Exception:
+                continue
+
+            hrefs: list[str] = []
+            try:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(html, "lxml")
+                hrefs = [
+                    urljoin(current_url, a.get("href", ""))
+                    for a in soup.find_all("a", href=True)
+                ]
+            except Exception:
+                pass
+
+            entries.append({"url": current_url, "depth": depth})
+
+            for href in hrefs:
+                parsed = urlparse(href)
+                if parsed.netloc == base_domain and parsed.scheme in ("http", "https"):
+                    if href not in visited:
+                        queue.append((href, depth + 1))
 
     return DiscoverResult(
         base_url=url,
         mode="crawl",
-        urls=urls,
-        total_urls=len(urls),
+        urls=[e["url"] for e in entries],
+        url_entries=entries,
+        total_urls=len(entries),
         timing_ms=t.elapsed_ms,
     )
