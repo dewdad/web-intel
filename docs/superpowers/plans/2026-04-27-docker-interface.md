@@ -787,7 +787,7 @@ Find and replace the block from `# 4. Docker available` through `# 6. SearXNG AP
     })
 
     # 5–6. SearXNG container + API (via _docker module)
-    from _docker import discover_container, probe_searxng, EnsureResult
+    from _docker import discover_container, probe_searxng
     from _config import SEARXNG_URL
 
     searxng_info = discover_container("wrs-searxng") if docker_ok else None
