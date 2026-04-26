@@ -191,5 +191,6 @@ Existing tests must not break. Run `pytest tests/ -v` (excluding `e2e_test.py`) 
 | `scripts/_docker.py` | **Create** — new module, all Docker logic |
 | `scripts/web.py` | **Modify** — `cmd_search`, `doctor`, `setup` |
 | `tests/test_docker.py` | **Create** — unit tests for `_docker.py` |
-| `docker/docker-compose.searxng.yml` | **Modify** — align port to 8888 to match live state |
-| `.env.example` | **Modify** — update default `SEARXNG_URL` to `http://localhost:8888` |
+| `.env.example` | **Modify** — clarify `SEARXNG_URL` comment with auto-detection note; keep default `http://localhost:8080` (matches compose default for new installs) |
+
+> **Note:** `docker/docker-compose.searxng.yml` is **not** changed. The port in the compose file (`8080:8080`) is the canonical default for new installs. The auto-detection logic in `get_searxng_url()` handles any mismatch between the running container's port and `SEARXNG_URL` at runtime, making a hardcoded port change in the committed compose file unnecessary and harmful for other users.
