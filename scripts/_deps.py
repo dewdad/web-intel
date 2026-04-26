@@ -26,6 +26,7 @@ _COMMAND_DEPS: dict[str, list[str]] = {
     "fetch": CORE_DEPS,
     "crawl": CORE_DEPS + CRAWL_DEPS,
     "scrape": CORE_DEPS,
+    "scrape-crawl4ai": CORE_DEPS + CRAWL_DEPS,
     "extract": ["trafilatura"],
     "discover": ["trafilatura"],
 }
