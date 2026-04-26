@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1776345761995,
+  "lastScanned": 1777110150198,
   "projectRoot": "/Users/i071496/copilot-projects/web-intel-skill",
   "techStack": {
     "languages": [],
@@ -25,6 +25,7 @@
     "isMonorepo": false,
     "workspaces": [],
     "mainDirectories": [
+      "bin",
       "examples",
       "scripts"
     ],
@@ -35,11 +36,21 @@
   },
   "customNotes": [],
   "directoryMap": {
+    "bin": {
+      "path": "bin",
+      "purpose": "Executable scripts",
+      "fileCount": 2,
+      "lastAccessed": 1777110150193,
+      "keyFiles": [
+        "web-intel",
+        "web-intel.bat"
+      ]
+    },
     "docker": {
       "path": "docker",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1776345761987,
+      "lastAccessed": 1777110150193,
       "keyFiles": [
         "docker-compose.searxng.yml",
         "docker-compose.yml"
@@ -49,7 +60,7 @@
       "path": "examples",
       "purpose": "Example code",
       "fileCount": 1,
-      "lastAccessed": 1776345761988,
+      "lastAccessed": 1777110150194,
       "keyFiles": [
         "example-workflows.md"
       ]
@@ -58,7 +69,7 @@
       "path": "references",
       "purpose": null,
       "fileCount": 5,
-      "lastAccessed": 1776345761988,
+      "lastAccessed": 1777110150194,
       "keyFiles": [
         "advanced-patterns.md",
         "output-schema.md",
@@ -71,7 +82,7 @@
       "path": "scripts",
       "purpose": "Build/utility scripts",
       "fileCount": 9,
-      "lastAccessed": 1776345761988,
+      "lastAccessed": 1777110150195,
       "keyFiles": [
         "_bs4_scrape.py",
         "_config.py",
@@ -81,61 +92,6 @@
       ]
     }
   },
-  "hotPaths": [
-    {
-      "path": "scripts/web.py",
-      "accessCount": 6,
-      "lastAccessed": 1776350440648,
-      "type": "file"
-    },
-    {
-      "path": "",
-      "accessCount": 4,
-      "lastAccessed": 1776350373193,
-      "type": "directory"
-    },
-    {
-      "path": "bin/web-intel.bat",
-      "accessCount": 2,
-      "lastAccessed": 1776350440701,
-      "type": "file"
-    },
-    {
-      "path": "SKILL.md",
-      "accessCount": 1,
-      "lastAccessed": 1776350324432,
-      "type": "file"
-    },
-    {
-      "path": "bin/web-intel",
-      "accessCount": 1,
-      "lastAccessed": 1776350332737,
-      "type": "file"
-    },
-    {
-      "path": "scripts/_deps.py",
-      "accessCount": 1,
-      "lastAccessed": 1776350332788,
-      "type": "file"
-    },
-    {
-      "path": "scripts/_crawl4ai_crawl.py",
-      "accessCount": 1,
-      "lastAccessed": 1776350377186,
-      "type": "file"
-    },
-    {
-      "path": "scripts/_httpx_fetch.py",
-      "accessCount": 1,
-      "lastAccessed": 1776350377238,
-      "type": "file"
-    },
-    {
-      "path": "scripts/_config.py",
-      "accessCount": 1,
-      "lastAccessed": 1776350377294,
-      "type": "file"
-    }
-  ],
+  "hotPaths": [],
   "userDirectives": []
 }

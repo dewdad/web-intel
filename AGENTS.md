@@ -118,7 +118,7 @@ web-intel/
 
 To force re-check: `rm -rf .deps_cache/`
 ## Conventions
-- No tests exist. Verify changes by running: `bin/web-intel doctor --pretty` for full health check, or `bin/web-intel  --help` for parse check, actual URLs for integration check.
+- No tests exist. Verify changes by running: `bin/web-intel doctor --pretty` for full health check, or `bin/web-intel --help` for parse check, actual URLs for integration check.
 
 - `--pretty` flag on every subcommand for human-readable JSON output.
 
