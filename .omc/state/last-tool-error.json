@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"ls /Users/i071496/copilot-projects/web-intel-skill/graphify-out/ 2>/dev/null && ls /Users/i071496/copilot-projects/web-intel-skill/graphify-out/wiki/ 2>/dev/null\",\"description\":\"Check grap...",
+  "error": "Exit code 1\nGRAPH_REPORT.md\ncache\ncost.json\ngraph.html\ngraph.json\nmanifest.json",
+  "timestamp": "2026-04-26T16:21:18.196Z",
+  "retry_count": 1
+}

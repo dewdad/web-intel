@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1777110150198,
+  "lastScanned": 1777220268619,
   "projectRoot": "/Users/i071496/copilot-projects/web-intel-skill",
   "techStack": {
     "languages": [],
@@ -27,7 +27,8 @@
     "mainDirectories": [
       "bin",
       "examples",
-      "scripts"
+      "scripts",
+      "tests"
     ],
     "gitBranches": {
       "defaultBranch": "main",
@@ -40,7 +41,7 @@
       "path": "bin",
       "purpose": "Executable scripts",
       "fileCount": 2,
-      "lastAccessed": 1777110150193,
+      "lastAccessed": 1777220268614,
       "keyFiles": [
         "web-intel",
         "web-intel.bat"
@@ -50,7 +51,7 @@
       "path": "docker",
       "purpose": null,
       "fileCount": 2,
-      "lastAccessed": 1777110150193,
+      "lastAccessed": 1777220268615,
       "keyFiles": [
         "docker-compose.searxng.yml",
         "docker-compose.yml"
@@ -60,16 +61,29 @@
       "path": "examples",
       "purpose": "Example code",
       "fileCount": 1,
-      "lastAccessed": 1777110150194,
+      "lastAccessed": 1777220268615,
       "keyFiles": [
         "example-workflows.md"
+      ]
+    },
+    "graphify-out": {
+      "path": "graphify-out",
+      "purpose": null,
+      "fileCount": 11,
+      "lastAccessed": 1777220268615,
+      "keyFiles": [
+        "GRAPH_REPORT.md",
+        "cost.json",
+        "graph.html",
+        "graph.json",
+        "manifest.json"
       ]
     },
     "references": {
       "path": "references",
       "purpose": null,
       "fileCount": 5,
-      "lastAccessed": 1777110150194,
+      "lastAccessed": 1777220268616,
       "keyFiles": [
         "advanced-patterns.md",
         "output-schema.md",
@@ -81,8 +95,8 @@
     "scripts": {
       "path": "scripts",
       "purpose": "Build/utility scripts",
-      "fileCount": 9,
-      "lastAccessed": 1777110150195,
+      "fileCount": 12,
+      "lastAccessed": 1777220268616,
       "keyFiles": [
         "_bs4_scrape.py",
         "_config.py",
@@ -90,8 +104,40 @@
         "_deps.py",
         "_httpx_fetch.py"
       ]
+    },
+    "tests": {
+      "path": "tests",
+      "purpose": "Test files",
+      "fileCount": 8,
+      "lastAccessed": 1777220268616,
+      "keyFiles": [
+        "e2e_test.py",
+        "test_bs4_scrape.py",
+        "test_deps.py",
+        "test_normalize.py",
+        "test_page_cache.py"
+      ]
     }
   },
-  "hotPaths": [],
+  "hotPaths": [
+    {
+      "path": "graphify-out/GRAPH_REPORT.md",
+      "accessCount": 1,
+      "lastAccessed": 1777220483092,
+      "type": "file"
+    },
+    {
+      "path": "SKILL.md",
+      "accessCount": 1,
+      "lastAccessed": 1777220483155,
+      "type": "file"
+    },
+    {
+      "path": "README.md",
+      "accessCount": 1,
+      "lastAccessed": 1777220483207,
+      "type": "file"
+    }
+  ],
   "userDirectives": []
 }
