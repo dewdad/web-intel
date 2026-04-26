@@ -107,7 +107,24 @@ def _append_citation_to_markdown(result: "WebResult") -> None:
     result.markdown = result.markdown.rstrip() + f"\n\n---\n**Source:** {' '.join(parts)}"
 
 
+def _apply_search_mode(args: argparse.Namespace) -> argparse.Namespace:
+    mode = getattr(args, "mode", None)
+    if mode == "fast":
+        args.no_enrich = True
+        args.no_cite = True
+        args.max_results = min(getattr(args, "max_results", 10), 5)
+        args.fetch_top = 0
+    elif mode == "deep":
+        args.no_enrich = False
+        args.no_cite = False
+        if not getattr(args, "fetch_top", 0):
+            args.fetch_top = 3
+        args.max_results = max(getattr(args, "max_results", 10), 10)
+    return args
+
+
 def cmd_search(args: argparse.Namespace) -> None:
+    args = _apply_search_mode(args)
     from _searxng import search
 
     result = search(
@@ -1012,6 +1029,16 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Max concurrent head-fetch requests for metadata enrichment (default: 5).")
     p_search.add_argument("--enrich-timeout", dest="enrich_timeout", type=int, default=8,
                           help="Per-request timeout in seconds for enrichment head-fetches (default: 8).")
+    p_search.add_argument(
+        "--mode",
+        choices=["fast", "deep"],
+        default=None,
+        help=(
+            "Preset mode: 'fast' disables enrichment/citations, limits to 5 results; "
+            "'deep' enables enrichment + fetch-top 3 + 10 results. "
+            "Individual flags override mode settings."
+        ),
+    )
     p_search.add_argument("--pretty", action="store_true")
     p_search.add_argument(
         "--no-fit",

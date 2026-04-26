@@ -137,3 +137,49 @@ def test_fit_markdown_called_on_fetch_top_content():
     result = fit_markdown(raw_md, query="attention mechanism transformers")
     assert article in result
     assert "Cookie policy" not in result
+
+
+def test_mode_fast_sets_no_enrich_no_cite():
+    """--mode fast should set no_enrich=True, no_cite=True, max_results=5."""
+    import argparse
+    # Simulate the namespace as produced by the parser
+    args = argparse.Namespace(
+        mode="fast",
+        no_enrich=False,
+        no_cite=False,
+        max_results=10,
+        fetch_top=0,
+    )
+    from web import _apply_search_mode
+    args = _apply_search_mode(args)
+    assert args.no_enrich is True
+    assert args.no_cite is True
+    assert args.max_results == 5
+
+def test_mode_deep_sets_fetch_top():
+    import argparse
+    args = argparse.Namespace(
+        mode="deep",
+        no_enrich=False,
+        no_cite=False,
+        max_results=10,
+        fetch_top=0,
+    )
+    from web import _apply_search_mode
+    args = _apply_search_mode(args)
+    assert args.no_enrich is False
+    assert args.fetch_top == 3
+
+def test_mode_default_is_noop():
+    import argparse
+    args = argparse.Namespace(
+        mode=None,
+        no_enrich=False,
+        no_cite=False,
+        max_results=10,
+        fetch_top=0,
+    )
+    from web import _apply_search_mode
+    args = _apply_search_mode(args)
+    assert args.no_enrich is False
+    assert args.fetch_top == 0
