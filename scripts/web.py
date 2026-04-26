@@ -126,19 +126,26 @@ def _apply_search_mode(args: argparse.Namespace) -> argparse.Namespace:
 def cmd_search(args: argparse.Namespace) -> None:
     args = _apply_search_mode(args)
     from _searxng import search
+    from _docker import get_searxng_url
 
-    result = search(
-        args.query,
-        engines=args.engines,
-        categories=args.categories,
-        language=args.language,
-        time_range=args.time_range,
-        max_results=args.max_results,
-        pageno=args.pageno,
-        no_rerank=getattr(args, "no_rerank", False),
-    )
+    resolved = get_searxng_url()
 
-    if result.status == "failed" and not getattr(args, "no_fallback", False):
+    if resolved.engines_degraded and not getattr(args, "no_fallback", False):
+        log.info("SearXNG engines degraded (rate-limited), skipping to fallback")
+        result = None
+    else:
+        result = search(
+            args.query,
+            engines=args.engines,
+            categories=args.categories,
+            language=args.language,
+            time_range=args.time_range,
+            max_results=args.max_results,
+            pageno=args.pageno,
+            no_rerank=getattr(args, "no_rerank", False),
+        )
+
+    if result is None or (result.status == "failed" and not getattr(args, "no_fallback", False)):
         import os
         from _search_fallback import search_brave, search_ddgs
 
@@ -147,7 +154,7 @@ def cmd_search(args: argparse.Namespace) -> None:
             log.info("SearXNG unavailable, trying Brave Search API fallback")
             result = search_brave(args.query, api_key=brave_key, max_results=args.max_results)
 
-        if result.status == "failed":
+        if result is None or result.status == "failed":
             log.info("SearXNG unavailable, trying ddgs multi-engine fallback")
             result = search_ddgs(args.query, max_results=args.max_results)
 
