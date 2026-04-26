@@ -204,3 +204,13 @@ def emit(data: dict[str, Any] | list[dict[str, Any]], *, pretty: bool = False) -
 def emit_error(command: str, error: str, *, pretty: bool = False) -> None:
     """Emit a standardized error envelope."""
     emit({"status": "failed", "command": command, "error": error}, pretty=pretty)
+
+
+def emit_json_array(
+    items: list[dict[str, Any]], *, pretty: bool = False
+) -> None:
+    """Write a JSON array to stdout. Used by fetch-batch --json-array."""
+    indent = 2 if pretty else None
+    json.dump(items, sys.stdout, indent=indent, ensure_ascii=False, default=str)
+    sys.stdout.write("\n")
+    sys.stdout.flush()

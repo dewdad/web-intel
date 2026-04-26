@@ -92,3 +92,16 @@ def test_searchresult_backend_defaults_to_empty():
     d = r.to_dict()
     # empty string should be omitted per to_dict convention
     assert "backend" not in d or d.get("backend") == ""
+
+
+import json as _json
+
+def test_emit_json_array_writes_valid_array(capsys):
+    from _normalize import emit_json_array
+    data = [{"status": "ok", "url": "https://a.com"}, {"status": "ok", "url": "https://b.com"}]
+    emit_json_array(data, pretty=False)
+    captured = capsys.readouterr()
+    parsed = _json.loads(captured.out)
+    assert isinstance(parsed, list)
+    assert len(parsed) == 2
+    assert parsed[0]["url"] == "https://a.com"

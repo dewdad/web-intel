@@ -530,8 +530,10 @@ def cmd_fetch_batch(args: argparse.Namespace) -> None:
         emit_error("fetch-batch", "No URLs provided", pretty=args.pretty)
         return
 
+    json_array = getattr(args, "json_array", False)
     sem = asyncio.Semaphore(args.concurrency)
     domain_last: dict[str, float] = {}
+    accumulated: list[dict] = []
 
     async def _fetch_one(url: str) -> None:
         async with sem:
@@ -550,12 +552,20 @@ def cmd_fetch_batch(args: argparse.Namespace) -> None:
             if args.max_tokens:
                 result = _apply_token_limit(result, args.max_tokens)
             result.citation = _build_citation(result)
-            emit(result.to_dict(), pretty=False)
+            result_dict = result.to_dict()
+            if json_array:
+                accumulated.append(result_dict)
+            else:
+                emit(result_dict, pretty=False)
 
     async def _run() -> None:
         await asyncio.gather(*[_fetch_one(u) for u in urls])
 
     asyncio.run(_run())
+
+    if json_array:
+        from _normalize import emit_json_array
+        emit_json_array(accumulated, pretty=args.pretty)
 
 
 def cmd_doctor(args: argparse.Namespace) -> None:
@@ -1169,6 +1179,17 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Minimum seconds between requests to the same domain (recommended: 1.0)")
     p_batch.add_argument("--include-tables", action="store_true")
     p_batch.add_argument("--include-links", action="store_true")
+    p_batch.add_argument(
+        "--json-array",
+        dest="json_array",
+        action="store_true",
+        default=False,
+        help=(
+            "Output a JSON array instead of NDJSON. "
+            "Useful when batch results must be parsed with json.loads(). "
+            "Default: NDJSON (one JSON object per line)."
+        ),
+    )
     p_batch.add_argument("--pretty", action="store_true")
     p_batch.set_defaults(func=cmd_fetch_batch)
 
