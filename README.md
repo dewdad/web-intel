@@ -15,11 +15,37 @@ All output is JSON on stdout. Logs go to stderr only. Every command works immedi
 
 ## Install
 
+**skillshare** (recommended — syncs across all your coding agents automatically):
+
 ```bash
 skillshare install dewdad/web-intel --track && skillshare sync
 ```
 
-Or clone directly:
+> Installs as `web-intel/`. If you see a directory-name conflict, ensure your skillshare config has
+> `target_naming: standard` (or per-target `skills.target_naming: standard`) so the install
+> directory is derived from the `name` field in `SKILL.md` rather than the `_owner-repo` convention.
+
+**npx skills** (Vercel's open agent skills CLI — zero install, works immediately):
+
+```bash
+# Install to current project (all detected agents)
+npx skills add dewdad/web-intel
+
+# Install globally across all projects
+npx skills add -g dewdad/web-intel
+
+# Target a specific agent
+npx skills add dewdad/web-intel -a claude-code
+npx skills add dewdad/web-intel -a opencode
+
+# Non-interactive (CI-friendly)
+npx skills add -g dewdad/web-intel -y
+```
+
+The CLI installs into a `web-intel/` directory inside each agent's skills folder
+(e.g. `.claude/skills/web-intel`, `.codex/skills/web-intel`).
+
+**Clone directly:**
 
 ```bash
 git clone https://github.com/dewdad/web-intel.git

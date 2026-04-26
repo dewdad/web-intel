@@ -1,11 +1,13 @@
 # [AGENTS.md](http://AGENTS.md)
 ## What this is
 `web-intel` — a Git repo (`dewdad/web-intel`) containing the `web-intel` skill. It provides AI agents with web search, crawling, scraping, and content extraction via a unified CLI (`scripts/web.py`).
-Not a Python package — no `setup.py`, `pyproject.toml`, or build system. Install with [skillshare](https://github.com/runkids/skillshare):
+Not a Python package — no `setup.py`, `pyproject.toml`, or build system. Install with [skillshare](https://github.com/runkids/skillshare) or [npx skills](https://github.com/vercel-labs/skills):
 ```bash
 skillshare install dewdad/web-intel --track && skillshare sync
-
+# or
+npx skills add dewdad/web-intel
 ```
+> **Naming:** skillshare's default `flat` naming installs this as `_dewdad-web-intel/`. Use `target_naming: standard` in your skillshare config (global or per-target) to install as `web-intel/` instead, matching the `name` field in `SKILL.md`.
 ## Plug-and-play architecture
 The skill is designed to work immediately when copied into a skills folder. Three tiers:
 - **Tier 1 (zero setup)**: `fetch`, `extract`, `discover`, `scrape` — Python deps auto-install on first run

@@ -18,6 +18,7 @@ allowed-tools:
   - Grep
   - Glob
 metadata:
+  install_name: web-intel
   requires:
     bins:
       - python3
