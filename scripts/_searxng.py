@@ -4,10 +4,17 @@ import math
 import re
 from typing import Any
 
-from _config import SEARXNG_URL, SEARXNG_API_KEY, create_httpx_client, get_logger
+import os
+
+from _config import SEARXNG_API_KEY, create_httpx_client, get_logger
 from _normalize import SearchResult, Timer, normalize_date, extract_domain
 
 log = get_logger("searxng")
+
+
+def _get_searxng_url() -> str:
+    """Read SEARXNG_URL at call time so env overrides from get_searxng_url() take effect."""
+    return os.environ.get("SEARXNG_URL", "http://localhost:8080")
 
 
 def _compute_quality_score(result: dict, query: str) -> float:
@@ -58,18 +65,20 @@ def search(
 
     with Timer() as t:
         try:
+            url = _get_searxng_url()
             with create_httpx_client(timeout=15) as client:
                 resp = client.get(
-                    f"{SEARXNG_URL}/search", params=params, headers=headers
+                    f"{url}/search", params=params, headers=headers
                 )
                 resp.raise_for_status()
                 data = resp.json()
         except Exception as exc:
+            url = _get_searxng_url()
             log.error("SearXNG request failed: %s", exc)
             return SearchResult(
                 query=query,
                 status="failed",
-                error=f"SearXNG request failed: {exc}. Is SearXNG running at {SEARXNG_URL}?",
+                error=f"SearXNG request failed: {exc}. Is SearXNG running at {url}?",
                 timing_ms=t.elapsed_ms,
                 backend="searxng",
             )
