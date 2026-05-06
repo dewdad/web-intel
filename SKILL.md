@@ -4,39 +4,14 @@ description: >
   Web search, crawling, scraping, and content extraction for AI agents.
   Routes tasks to SearXNG, httpx, Trafilatura, BeautifulSoup, or Crawl4AI
   based on content type and page complexity.
-version: 0.2.0
-self_updating: true
-allowed-tools:
-  - Bash(python3:*)
-  - Bash(python:*)
-  - Bash(docker:*)
-  - Bash(docker-compose:*)
-  - Bash(curl:*)
-  - Bash(*/web-intel:*)
-  - Read
-  - Write
-  - Grep
-  - Glob
+
+  Use when: researching topics, fetching web pages, scraping structured data,
+  crawling JS-heavy sites, or extracting content from URLs.
 metadata:
-  install_name: web-intel
-  requires:
-    bins:
-      - python3
-    python:
-      - httpx[http2]
-      - httpx-retries
-      - trafilatura
-      - beautifulsoup4
-      - lxml
-      - ddgs
-      - crawl4ai
-    skills: []
-  tags:
-    - web
-    - search
-    - scraping
-    - crawling
-    - research
+  version: "0.2.0"
+  tags: "web, search, scraping, crawling, research"
+  requires-python: "httpx, trafilatura, beautifulsoup4, lxml, ddgs, crawl4ai"
+  requires-bins: "python3"
 ---
 
 # Web Intel
