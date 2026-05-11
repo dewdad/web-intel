@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 from dataclasses import dataclass, field
 from typing import NamedTuple
@@ -8,6 +9,53 @@ from typing import NamedTuple
 from _config import get_logger
 
 log = get_logger("docker")
+
+# Default host port for SearXNG — chosen to avoid conflicts with common services
+# (8080 = many proxies/dev servers, 8443 = HTTPS alt, 3000/5000 = dev servers)
+DEFAULT_SEARXNG_HOST_PORT = 9871
+
+# Candidate ports to try if default is occupied (all uncommon, >9000, no well-known services)
+_PORT_CANDIDATES = [9871, 9872, 9873, 9874, 9875, 9881, 9891, 9841, 9851, 9861]
+
+
+def is_port_free(port: int, host: str = "127.0.0.1") -> bool:
+    """Check if a TCP port is free on the given host (bind-based check).
+
+    Uses bind() instead of connect() to detect ports held by Docker/wslrelay
+    that accept connections but don't serve HTTP properly.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host, port))
+            return True  # bind succeeded = port is free
+        except OSError:
+            return False  # bind failed = port in use
+
+
+def find_free_port(preferred: int = DEFAULT_SEARXNG_HOST_PORT) -> int:
+    """Find a free port, starting with the preferred port then trying candidates.
+
+    Returns the first available port from the candidate list.
+    Falls back to OS-assigned ephemeral port if all candidates are taken.
+    """
+    # Try preferred first
+    if is_port_free(preferred):
+        return preferred
+
+    # Try candidate list (skip preferred since we already checked)
+    for port in _PORT_CANDIDATES:
+        if port == preferred:
+            continue
+        if is_port_free(port):
+            log.info("Default port %d in use, selected free port %d", preferred, port)
+            return port
+
+    # All candidates taken — ask OS for an ephemeral port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    log.info("All candidate ports in use, using OS-assigned port %d", port)
+    return port
 
 
 @dataclass
@@ -138,7 +186,7 @@ def get_searxng_url() -> ResolvedBackend:
         log.debug("wrs-searxng container exists but status=%s", info.status)
         return ResolvedBackend(url=env_url, engines_degraded=False)
 
-    discovered_url = f"http://localhost:{info.host_port}"
+    discovered_url = f"http://127.0.0.1:{info.host_port}"
     docker_probe = probe_searxng(discovered_url)
 
     if docker_probe.reachable:
@@ -152,6 +200,17 @@ def get_searxng_url() -> ResolvedBackend:
 
     log.debug("wrs-searxng container running but probe failed on port %d", info.host_port)
     return ResolvedBackend(url=env_url, engines_degraded=False)
+
+
+def _compose_env(skill_dir: "Path", port: int | None = None) -> dict[str, str]:
+    """Build environment dict for docker-compose with the resolved host port."""
+    import os
+    env = os.environ.copy()
+    if port is not None:
+        env["SEARXNG_HOST_PORT"] = str(port)
+    elif "SEARXNG_HOST_PORT" not in env:
+        env["SEARXNG_HOST_PORT"] = str(DEFAULT_SEARXNG_HOST_PORT)
+    return env
 
 
 def ensure_searxng_running(skill_dir: "Path") -> EnsureResult:
@@ -174,15 +233,27 @@ def ensure_searxng_running(skill_dir: "Path") -> EnsureResult:
         )
         return EnsureResult(action="already_running", stale_mount=stale, stale_mount_hint=hint)
 
+    # Find a free port for the host binding
+    import os
+    preferred = int(os.environ.get("SEARXNG_HOST_PORT", str(DEFAULT_SEARXNG_HOST_PORT)))
+    host_port = find_free_port(preferred)
+    env = _compose_env(skill_dir, port=host_port)
+
     try:
         result = subprocess.run(
             ["docker", "compose", "-f", str(compose_file), "up", "-d"],
             capture_output=True,
             text=True,
             timeout=60,
+            env=env,
         )
         if result.returncode != 0:
             return EnsureResult(action="failed", error=result.stderr.strip())
+
+        # Update runtime SEARXNG_URL to reflect the actual port used
+        os.environ["SEARXNG_URL"] = f"http://127.0.0.1:{host_port}"
+        os.environ["SEARXNG_HOST_PORT"] = str(host_port)
+        log.info("SearXNG started on port %d", host_port)
         return EnsureResult(action="started")
     except FileNotFoundError:
         return EnsureResult(action="no_docker")
@@ -191,20 +262,31 @@ def ensure_searxng_running(skill_dir: "Path") -> EnsureResult:
 
 
 def recreate_searxng(skill_dir: "Path") -> EnsureResult:
+    import os
     from pathlib import Path
 
     compose_file = Path(skill_dir) / "docker" / "docker-compose.searxng.yml"
+
+    # Find a free port for the host binding
+    preferred = int(os.environ.get("SEARXNG_HOST_PORT", str(DEFAULT_SEARXNG_HOST_PORT)))
+    host_port = find_free_port(preferred)
+    env = _compose_env(skill_dir, port=host_port)
+
     try:
         subprocess.run(
             ["docker", "compose", "-f", str(compose_file), "down", "--remove-orphans"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=30, env=env,
         )
         result = subprocess.run(
             ["docker", "compose", "-f", str(compose_file), "up", "-d"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, env=env,
         )
         if result.returncode != 0:
             return EnsureResult(action="failed", error=result.stderr.strip())
+
+        os.environ["SEARXNG_URL"] = f"http://127.0.0.1:{host_port}"
+        os.environ["SEARXNG_HOST_PORT"] = str(host_port)
+        log.info("SearXNG recreated on port %d", host_port)
         return EnsureResult(action="started")
     except FileNotFoundError:
         return EnsureResult(action="no_docker")

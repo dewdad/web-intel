@@ -29,7 +29,7 @@ def _load_dotenv(env_path: Optional[Path] = None) -> None:
 
 _load_dotenv()
 
-SEARXNG_URL: str = os.environ.get("SEARXNG_URL", "http://localhost:8080")
+SEARXNG_URL: str = os.environ.get("SEARXNG_URL", "http://127.0.0.1:9871")
 SEARXNG_API_KEY: Optional[str] = os.environ.get("SEARXNG_API_KEY")
 
 CRAWL4AI_DOCKER_URL: str = os.environ.get(

@@ -6,7 +6,7 @@ from typing import Any
 
 import os
 
-from _config import SEARXNG_API_KEY, create_httpx_client, get_logger
+from _config import SEARXNG_URL, SEARXNG_API_KEY, create_httpx_client, get_logger
 from _normalize import SearchResult, Timer, normalize_date, extract_domain
 
 log = get_logger("searxng")
@@ -14,7 +14,7 @@ log = get_logger("searxng")
 
 def _get_searxng_url() -> str:
     """Read SEARXNG_URL at call time so env overrides from get_searxng_url() take effect."""
-    return os.environ.get("SEARXNG_URL", "http://localhost:8080")
+    return os.environ.get("SEARXNG_URL", SEARXNG_URL)
 
 
 def _compute_quality_score(result: dict, query: str) -> float:

@@ -3,11 +3,11 @@ services:
     image: searxng/searxng:latest
     container_name: wrs-searxng
     ports:
-      - "8080:8080"
+      - "${SEARXNG_HOST_PORT:-9871}:8080"
     volumes:
       - ./searxng:/etc/searxng:rw
     environment:
-      - SEARXNG_BASE_URL=http://localhost:8080/
+      - SEARXNG_BASE_URL=http://localhost:${SEARXNG_HOST_PORT:-9871}/
     depends_on:
       - valkey
     restart: unless-stopped

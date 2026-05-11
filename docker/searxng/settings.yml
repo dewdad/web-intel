@@ -14,8 +14,8 @@ search:
 server:
   secret_key: "change-me-in-production"
   bind_address: "0.0.0.0"
-  port: 8080
-  limiter: true
+  port: 8080  # internal container port — host port set via SEARXNG_HOST_PORT in docker-compose
+  limiter: false
 
 ui:
   static_use_hash: true

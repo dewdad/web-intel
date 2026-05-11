@@ -652,7 +652,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     })
 
     probe_url = (
-        f"http://localhost:{searxng_info.host_port}"
+        f"http://127.0.0.1:{searxng_info.host_port}"
         if searxng_running and searxng_info.host_port
         else os.environ.get("SEARXNG_URL", SEARXNG_URL)
     )
@@ -674,7 +674,16 @@ def cmd_doctor(args: argparse.Namespace) -> None:
 
     if searxng_running and searxng_info.volume_sources:
         expected_mount = str(_SKILL_DIR / "docker" / "searxng")
-        stale = expected_mount not in searxng_info.volume_sources
+        # Resolve symlinks in volume sources for comparison (Docker may store
+        # the symlink path while _SKILL_DIR is the resolved target)
+        resolved_sources = []
+        for src in searxng_info.volume_sources:
+            try:
+                resolved_sources.append(str(Path(src).resolve()))
+            except (OSError, ValueError):
+                resolved_sources.append(src)
+        stale = (expected_mount not in searxng_info.volume_sources
+                 and expected_mount not in resolved_sources)
         checks.append({
             "check": "searxng_volume_mount",
             "status": "stale" if stale else "ok",
