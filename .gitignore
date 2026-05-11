@@ -17,3 +17,7 @@ graphify-out/.needs_update
 .omc/state/agent-replay-*
 .claude/settings.local.json
 raw/
+
+# macOS AppleDouble resource forks (from cloud sync)
+._*
+.DS_Store
