@@ -123,6 +123,17 @@ class WebResult:
             d.pop("changed", None)
         if d.get("citation") is None:
             d.pop("citation", None)
+
+        # Suppress chunk/truncation fields when features weren't engaged
+        _conditional_zero_fields = {
+            "char_count", "chunk_index", "chunk_count", "chunk_tokens",
+        }
+        for field_name in _conditional_zero_fields:
+            if d.get(field_name) == 0:
+                d.pop(field_name, None)
+        if d.get("truncated") is False:
+            d.pop("truncated", None)
+
         d = {
             k: v
             for k, v in d.items()
