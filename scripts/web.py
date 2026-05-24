@@ -128,6 +128,15 @@ def cmd_search(args: argparse.Namespace) -> None:
     from _searxng import search
     from _docker import get_searxng_url
 
+    # --site DOMAIN: convenience wrapper that injects a site: filter unless
+    # the user already wrote one in the raw query.
+    site = (getattr(args, "site", "") or "").strip()
+    if site:
+        # Strip protocol if user passed a URL by mistake.
+        site = site.replace("https://", "").replace("http://", "").rstrip("/")
+        if "site:" not in args.query.lower():
+            args.query = f"site:{site} {args.query}".strip()
+
     resolved = get_searxng_url()
 
     if resolved.engines_degraded and not getattr(args, "no_fallback", False):
@@ -299,13 +308,15 @@ def _post_process_result(result: "WebResult", args: argparse.Namespace) -> "WebR
 
     diff = getattr(args, "diff", False)
     no_cache = getattr(args, "no_cache", False)
-    if (diff or no_cache) and result.status == "ok":
+    cache_ttl = getattr(args, "cache_ttl", 0)
+    if (diff or no_cache or cache_ttl > 0) and result.status == "ok":
         from _page_cache import check_and_update
         changed, previous_hash, current_hash = check_and_update(
             result.url,
             result.markdown or result.text or "",
             result.title,
             no_cache=no_cache,
+            ttl_seconds=cache_ttl,
         )
         result.changed = changed
         result.previous_hash = previous_hash
@@ -348,9 +359,21 @@ def cmd_fetch(args: argparse.Namespace) -> None:
             )
             result.status = "partial"
         else:
-            crawl_result = crawl(args.url, timeout=args.timeout)
-            if crawl_result.status == "ok" and crawl_result.markdown:
-                result = crawl_result
+            try:
+                crawl_result = crawl(args.url, timeout=args.timeout)
+                if crawl_result.status == "ok" and crawl_result.markdown:
+                    result = crawl_result
+                elif crawl_result.status == "failed":
+                    result.error = (
+                        (result.error or "")
+                        + f" | crawl4ai fallback also failed: {crawl_result.error or 'unknown'}"
+                    )
+            except Exception as crawl_exc:
+                log.error("crawl4ai fallback crashed for %s: %s", args.url, crawl_exc)
+                result.error = (
+                    (result.error or "")
+                    + f" | crawl4ai fallback crashed: {crawl_exc}"
+                )
 
     if getattr(args, "wait_for_text", "") and result.status == "ok":
         import time
@@ -379,16 +402,26 @@ def cmd_crawl(args: argparse.Namespace) -> None:
     from _crawl4ai_crawl import crawl
 
     use_docker = args.docker or (not args.docker and _crawl4ai_docker_available())
-    result = crawl(
-        args.url,
-        wait_for=args.wait_for,
-        screenshot=args.screenshot,
-        pdf=args.pdf,
-        execute_js=args.execute_js,
-        timeout=args.timeout,
-        headless=args.headless,
-        use_docker=use_docker,
-    )
+    try:
+        result = crawl(
+            args.url,
+            wait_for=args.wait_for,
+            screenshot=args.screenshot,
+            pdf=args.pdf,
+            execute_js=args.execute_js,
+            timeout=args.timeout,
+            headless=args.headless,
+            use_docker=use_docker,
+        )
+    except Exception as exc:
+        log.error("crawl command crashed for %s: %s", args.url, exc)
+        from _normalize import WebResult
+        result = WebResult(
+            url=args.url,
+            status="failed",
+            fetch_mode="crawl4ai",
+            error=f"Crawl4AI crashed: {exc}",
+        )
     result.command = "crawl"
     result = _post_process_result(result, args)
     emit(result.to_dict(), pretty=args.pretty)
@@ -516,6 +549,31 @@ def cmd_discover(args: argparse.Namespace) -> None:
             max_urls=args.max_urls,
             language=args.language,
         )
+
+    # Emit a hint when the URL produced no discoverable pages — root domains
+    # frequently host docs/blog content on subdomains (docs.*, blog.*) that
+    # carry the actual sitemap. Silent zero-results were a common confusion.
+    if result.status == "ok" and result.total_urls == 0:
+        out = result.to_dict()
+        from urllib.parse import urlparse
+        host = urlparse(args.url).netloc or args.url
+        suggestions = []
+        if not any(host.startswith(p) for p in ("docs.", "blog.", "www.")):
+            suggestions.extend([f"docs.{host}", f"blog.{host}", f"www.{host}"])
+        hint_parts = [
+            f"No URLs discovered for {args.url}. ",
+            "If this is a root marketing domain, sitemaps are usually on a "
+            "content subdomain. ",
+        ]
+        if suggestions:
+            hint_parts.append(f"Try: {', '.join(suggestions)}. ")
+        hint_parts.append(
+            "Other options: --mode crawl (BFS instead of sitemap), or check "
+            f"{args.url.rstrip('/')}/robots.txt for the canonical Sitemap: line."
+        )
+        out["hint"] = "".join(hint_parts)
+        emit(out, pretty=args.pretty)
+        return
 
     emit(result.to_dict(), pretty=args.pretty)
 
@@ -766,34 +824,79 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     )
 
     # 9. Crawl4AI local browser
+    #
+    # Previous implementation only checked that ms-playwright/ existed and was
+    # non-empty. That was misleading because the directory accumulates stale
+    # installs from any Playwright client (mcp-chrome, MS Playwright MCP,
+    # other tools) — so it would report ok while crawl4ai's pinned chromium
+    # version was actually missing, and crawl would crash at runtime with
+    # "Executable doesn't exist at chromium-<rev>/chrome.exe".
+    #
+    # The honest check: a directory matching ``chromium-*`` (or
+    # ``chromium_headless_shell-*``) exists AND it contains the platform
+    # chrome binary. We don't pin the revision because crawl4ai bumps it
+    # frequently; the runtime error will catch a true version mismatch.
     crawl4ai_browser_ok = False
+    crawl4ai_browser_detail = ""
     try:
         playwright_paths = [
             Path.home() / ".cache" / "ms-playwright",           # Linux
             Path.home() / "Library" / "Caches" / "ms-playwright",  # macOS
             Path.home() / "AppData" / "Local" / "ms-playwright",    # Windows
         ]
+        # Platform-specific chrome binary location *inside* a chromium-* dir.
+        if sys.platform == "win32":
+            binary_relpaths = [Path("chrome-win64") / "chrome.exe",
+                               Path("chrome-win") / "chrome.exe"]
+        elif sys.platform == "darwin":
+            binary_relpaths = [
+                Path("chrome-mac") / "Chromium.app" / "Contents" / "MacOS" / "Chromium",
+                Path("chrome-mac-arm64") / "Chromium.app" / "Contents" / "MacOS" / "Chromium",
+            ]
+        else:
+            binary_relpaths = [Path("chrome-linux") / "chrome",
+                               Path("chrome-linux") / "headless_shell"]
+
         for playwright_path in playwright_paths:
-            if playwright_path.exists() and any(playwright_path.iterdir()):
-                crawl4ai_browser_ok = True
+            if not playwright_path.exists():
+                continue
+            chromium_dirs = [
+                d for d in playwright_path.iterdir()
+                if d.is_dir() and (d.name.startswith("chromium-")
+                                   or d.name.startswith("chromium_headless_shell-"))
+            ]
+            if not chromium_dirs:
+                continue
+            # Newest first — crawl4ai always uses the latest installed rev.
+            chromium_dirs.sort(key=lambda d: d.name, reverse=True)
+            for cdir in chromium_dirs:
+                if any((cdir / rel).is_file() for rel in binary_relpaths):
+                    crawl4ai_browser_ok = True
+                    crawl4ai_browser_detail = f"{cdir.name} at {playwright_path}"
+                    break
+            if crawl4ai_browser_ok:
                 break
-    except Exception:
-        pass
+    except Exception as exc:
+        crawl4ai_browser_detail = f"probe error: {exc}"
     if not crawl4ai_browser_ok:
         try:
             import crawl4ai  # noqa: F401
 
             # If crawl4ai is importable, check if setup was run
             crawl4ai_setup = shutil.which("crawl4ai-setup")
-            checks.append(
-                {
-                    "check": "crawl4ai_browser",
-                    "status": "not_setup",
-                    "hint": "Run: crawl4ai-setup"
-                    if crawl4ai_setup
-                    else "pip install crawl4ai && crawl4ai-setup",
-                }
+            hint = (
+                "Run: crawl4ai-setup"
+                if crawl4ai_setup
+                else "pip install crawl4ai && crawl4ai-setup"
             )
+            check_entry = {
+                "check": "crawl4ai_browser",
+                "status": "not_setup",
+                "hint": hint,
+            }
+            if crawl4ai_browser_detail:
+                check_entry["detail"] = crawl4ai_browser_detail
+            checks.append(check_entry)
         except ImportError:
             checks.append(
                 {
@@ -803,7 +906,11 @@ def cmd_doctor(args: argparse.Namespace) -> None:
                 }
             )
     else:
-        checks.append({"check": "crawl4ai_browser", "status": "ok"})
+        checks.append({
+            "check": "crawl4ai_browser",
+            "status": "ok",
+            "detail": crawl4ai_browser_detail,
+        })
 
     # 10. .env file
     env_file = _SKILL_DIR / ".env"
@@ -1017,6 +1124,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_search = sub.add_parser("search")
     p_search.add_argument("query")
+    p_search.add_argument(
+        "--site",
+        dest="site",
+        default="",
+        metavar="DOMAIN",
+        help=(
+            "Restrict to a single site. Sugar for prepending 'site:DOMAIN' "
+            "to the query. Pass without scheme: --site github.com"
+        ),
+    )
     p_search.add_argument("--engines", default="")
     p_search.add_argument("--categories", default="general")
     p_search.add_argument("--language", default="en")
@@ -1096,6 +1213,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Skip reading/writing the content diff cache for this request.",
+    )
+    p_fetch.add_argument(
+        "--cache-ttl",
+        dest="cache_ttl",
+        type=int,
+        default=0,
+        metavar="SECONDS",
+        help=(
+            "Treat cached entries older than SECONDS as missing. Implies "
+            "diff-mode. Use to limit how stale 'changed=False' verdicts can be "
+            "(e.g. --cache-ttl 86400 = 'changed only matters within 24h')."
+        ),
     )
     p_fetch.add_argument("--pretty", action="store_true")
     p_fetch.set_defaults(func=cmd_fetch)

@@ -71,13 +71,15 @@ $SKILL_DIR/bin/web-intel setup --clear-cache --pretty  # clear dep-stamp cache a
 ### `search` — Web search
 
 ```bash
-$SKILL_DIR/bin/web-intel search "query" [--engines google,brave] [--categories general] [--language en]
+$SKILL_DIR/bin/web-intel search "query" [--site DOMAIN] [--engines google,brave] [--categories general] [--language en]
   [--time-range week] [--max-results 10] [--no-rerank] [--no-fallback]
   [--mode fast|deep]
   [--fetch-top N] [--fetch-concurrency 3] [--fetch-timeout 20] [--no-fit]
   [--no-enrich] [--enrich-concurrency 5] [--enrich-timeout 8]
   [--no-cite]
 ```
+
+- `--site DOMAIN`: Restrict to a single site. Sugar for prepending `site:DOMAIN` to the query (e.g. `--site github.com` → `site:github.com <query>`). Skipped if `site:` already appears in the query.
 
 - `--fetch-top N`: Fetch and extract full content from the top N results (one-shot pipeline). Also backfills `published_at`/`authors` from fetched content for free.
 - `--no-rerank`: Preserve SearXNG result ordering instead of reranking by `quality_score`.
@@ -102,7 +104,7 @@ Top-level: `citations[]` — always present (unless `--no-cite`), one entry per 
 ### `fetch` — Fast static page fetch + extraction
 
 ```bash
-$SKILL_DIR/bin/web-intel fetch URL [--include-tables] [--include-links] [--favor-precision|--favor-recall] [--output-format markdown] [--timeout 30] [--max-tokens N] [--chunk-tokens N] [--chunk-index I] [--relevant-to "query"] [--relevant-top 10] [--wait-for-text "text"] [--diff] [--no-cache]
+$SKILL_DIR/bin/web-intel fetch URL [--include-tables] [--include-links] [--favor-precision|--favor-recall] [--output-format markdown] [--timeout 30] [--max-tokens N] [--chunk-tokens N] [--chunk-index I] [--relevant-to "query"] [--relevant-top 10] [--wait-for-text "text"] [--diff] [--no-cache] [--cache-ttl SECONDS]
 ```
 
 - `--max-tokens N`: Truncate output to approximately N tokens (1 token ≈ 4 chars). Adds `truncated=true` and `char_count` when truncated.
@@ -111,6 +113,7 @@ $SKILL_DIR/bin/web-intel fetch URL [--include-tables] [--include-links] [--favor
 - `--wait-for-text "text"`: Retry httpx fetch until this text appears in the extracted content (max 3 retries, 2s delay). **Static pages only** — does not work for JS-gated content; use `crawl` instead.
 - `--diff`: Compare content hash to cached version. Response includes `changed` (null=first visit, true/false), `current_hash`, `previous_hash`.
 - `--no-cache`: Skip reading and writing the content diff cache for this request. Use in agent loops to force a fresh fetch without storing results.
+- `--cache-ttl SECONDS`: Treat cache entries older than SECONDS as missing. Implies diff-mode. Useful when `changed=False` only matters within a recency window — e.g. `--cache-ttl 86400` means "tell me what changed in the last 24h, ignore older state".
 
 `--chunk-tokens` and `--max-tokens` are mutually exclusive; `--chunk-tokens` takes precedence.
 
