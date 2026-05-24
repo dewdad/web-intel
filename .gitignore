@@ -10,13 +10,20 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-graphify-out/cache/
-graphify-out/.graphify_*
-graphify-out/.needs_update
-.omc/sessions/
-.omc/state/agent-replay-*
+
+# Per-tool / per-agent local state (not part of the skill payload)
+.opencode/
+.sisyphus/
+.omc/
 .claude/settings.local.json
+
+# Graphify analysis artifacts
+graphify-out/
+
 raw/
+
+# Draft / work-in-progress files (e.g. settings.yml.new)
+*.new
 
 # macOS AppleDouble resource forks (from cloud sync)
 ._*
