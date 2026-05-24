@@ -23,7 +23,16 @@ from pathlib import Path
 import pytest
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
-CLI = str(SKILL_DIR / "bin" / "web-intel")
+
+def _resolve_cli() -> list[str]:
+    """Return the CLI invocation list, handling Windows where bash scripts aren't directly runnable."""
+    if sys.platform == "win32":
+        # Use Python directly on Windows
+        return [sys.executable, str(SKILL_DIR / "scripts" / "web.py")]
+    return [str(SKILL_DIR / "bin" / "web-intel")]
+
+CLI_CMD = _resolve_cli()
+CLI = str(SKILL_DIR / "bin" / "web-intel")  # Legacy, used by _run
 
 STATIC_URL = "https://example.com"
 WIKIPEDIA_TABLE_URL = "https://en.wikipedia.org/wiki/Python_(programming_language)"
@@ -51,7 +60,7 @@ def _searxng_url() -> str:
 
 def _run(*args: str, timeout: int = 60) -> dict:
     result = subprocess.run(
-        [CLI, *args],
+        [*CLI_CMD, *args],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -111,6 +120,8 @@ class TestDoctor:
             "docker",
             "searxng_docker",
             "searxng_api",
+            "searxng_engines",
+            "searxng_volume_mount",
             "crawl4ai_docker",
             "crawl4ai_api",
             "crawl4ai_browser",
@@ -167,7 +178,7 @@ class TestFetch:
 
     def test_fetch_invalid_url_returns_failed(self):
         result = subprocess.run(
-            [CLI, "fetch", "https://this-domain-does-not-exist-xyz-abc.invalid"],
+            [*CLI_CMD, "fetch", "https://this-domain-does-not-exist-xyz-abc.invalid"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -181,12 +192,57 @@ class TestFetch:
         assert data["status"] == "failed"
         assert "error" in data
 
+    def test_fetch_403_returns_error_envelope(self):
+        """A 403 response must produce a JSON error envelope, never silent empty output."""
+        result = subprocess.run(
+            [*CLI_CMD, "fetch", "https://www.perplexity.ai/search/test", "--no-fallback-crawl"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        # Must produce JSON on stdout regardless of exit code
+        last_json_line = next(
+            (line for line in reversed(result.stdout.splitlines()) if line.startswith("{")),
+            None,
+        )
+        assert last_json_line is not None, (
+            f"No JSON output for 403 URL. stdout={result.stdout!r}, stderr={result.stderr!r}"
+        )
+        data = json.loads(last_json_line)
+        assert data["status"] == "failed"
+        assert data["command"] == "fetch"
+        assert "error" in data
+        assert "403" in data["error"] or "Forbidden" in data["error"]
+
+    def test_fetch_403_with_fallback_returns_error_envelope(self):
+        """A 403 with crawl4ai fallback enabled must still produce JSON, not hang or crash."""
+        result = subprocess.run(
+            [*CLI_CMD, "fetch", "https://www.perplexity.ai/search/test"],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        # Must produce JSON on stdout regardless of whether fallback succeeded
+        last_json_line = next(
+            (line for line in reversed(result.stdout.splitlines()) if line.startswith("{")),
+            None,
+        )
+        assert last_json_line is not None, (
+            f"No JSON output for 403+fallback. stdout={result.stdout!r}, stderr={result.stderr!r}"
+        )
+        data = json.loads(last_json_line)
+        assert data["command"] == "fetch"
+        assert data["status"] in ("ok", "partial", "failed")
+        # If still failed, must have error details
+        if data["status"] == "failed":
+            assert "error" in data
+
 
 class TestExtract:
     def test_extract_from_stdin(self):
         html = "<html><body><article><p>Hello world from web-intel test.</p></article></body></html>"
         result = subprocess.run(
-            [CLI, "extract", "--stdin"],
+            [*CLI_CMD, "extract", "--stdin"],
             input=html,
             capture_output=True,
             text=True,
@@ -230,7 +286,7 @@ class TestScrape:
 
     def test_scrape_requires_mode_flag(self):
         result = subprocess.run(
-            [CLI, "scrape", STATIC_URL],
+            [*CLI_CMD, "scrape", STATIC_URL],
             capture_output=True,
             text=True,
             timeout=30,

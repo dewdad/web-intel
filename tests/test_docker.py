@@ -126,11 +126,16 @@ def test_get_searxng_url_env_url_works(monkeypatch):
 
 
 def test_get_searxng_url_env_fails_docker_works(monkeypatch):
-    """Priority 2: env URL fails, but container is running on different port."""
+    """Priority 2: env URL fails, but container is running on different port.
+
+    NOTE: ``get_searxng_url`` builds the discovered URL with ``127.0.0.1``
+    (not ``localhost``) to dodge IPv6 / wslrelay interception on Windows.
+    See commit 5758c2a and the comment in .env.example.
+    """
     monkeypatch.setenv("SEARXNG_URL", "http://localhost:8080")
 
     failing_probe = ProbeResult(reachable=False, engines_degraded=False, url="http://localhost:8080")
-    ok_probe = ProbeResult(reachable=True, engines_degraded=False, url="http://localhost:8888")
+    ok_probe = ProbeResult(reachable=True, engines_degraded=False, url="http://127.0.0.1:8888")
     container = ContainerInfo(name="wrs-searxng", status="running", host_port=8888,
                                compose_project="web-intel", volume_sources=[])
 
@@ -143,9 +148,9 @@ def test_get_searxng_url_env_fails_docker_works(monkeypatch):
          patch("_docker.discover_container", return_value=container):
         result = get_searxng_url()
 
-    assert result.url == "http://localhost:8888"
+    assert result.url == "http://127.0.0.1:8888"
     assert result.engines_degraded is False
-    assert os.environ.get("SEARXNG_URL") == "http://localhost:8888"
+    assert os.environ.get("SEARXNG_URL") == "http://127.0.0.1:8888"
 
 
 def test_get_searxng_url_container_running_but_crashed(monkeypatch):

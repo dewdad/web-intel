@@ -10,21 +10,34 @@ from typing import Optional
 
 
 def _load_dotenv(env_path: Optional[Path] = None) -> None:
-    """Load .env file into os.environ. No-op if file missing."""
+    """Load .env file into os.environ. No-op if file missing.
+
+    Robust to:
+    - UTF-8 BOM (``\ufeff``) at start of file (Windows editors often add this).
+    - CRLF line endings (``str.strip()`` already handles ``\r``).
+    - Mixed/legacy encodings — falls back to latin-1 so we never crash on a
+      stray non-ASCII byte in a comment.
+    """
     if env_path is None:
         env_path = Path(__file__).resolve().parent.parent / ".env"
     if not env_path.is_file():
         return
-    with open(env_path) as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip().strip("\"'")
-            if key and key not in os.environ:  # don't override existing
-                os.environ[key] = value
+    try:
+        # utf-8-sig transparently strips a leading BOM if present.
+        text = env_path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        text = env_path.read_text(encoding="latin-1")
+    for line in text.splitlines():
+        # Belt-and-suspenders: strip any stray BOM that appeared mid-stream
+        # (multiple concatenated .env files, copy-paste artefacts, etc.).
+        line = line.lstrip("\ufeff").strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if key and key not in os.environ:  # don't override existing
+            os.environ[key] = value
 
 
 _load_dotenv()

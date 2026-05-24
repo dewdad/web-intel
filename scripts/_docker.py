@@ -137,23 +137,53 @@ def discover_container(name: str) -> ContainerInfo | None:
         return None
 
 
-def probe_searxng(url: str, timeout: int = 3) -> ProbeResult:
+def probe_searxng(url: str, timeout: int = 7, retries: int = 1) -> ProbeResult:
+    """Probe a SearXNG instance for liveness + working engines.
+
+    Notes on the defaults:
+      * ``timeout=7`` (was 3): cold-start SearXNG on Windows + HTTP/2
+        negotiation occasionally takes 4-6s on the first request. 3s
+        produced spurious ``searxng_api: fail`` results in ``doctor``.
+      * ``retries=1``: one retry on connect/read timeout absorbs that
+        cold-start latency without making a healthy probe meaningfully slower.
+      * Probe query is ``wikipedia`` (was ``test``). ``test`` is a common
+        rate-limit target on Google/Bing; an empty result set there does
+        NOT mean engines are degraded. ``wikipedia`` reliably returns
+        results across all major engines.
+      * ``engines_degraded`` is now True only when SearXNG is reachable
+        AND returns zero results AND reports zero engines actually answered
+        — not just an empty ``results[]``.
+    """
     import time
     import urllib.request
-    import urllib.error
 
-    probe_url = f"{url.rstrip('/')}/search?q=test&format=json"
+    probe_url = f"{url.rstrip('/')}/search?q=wikipedia&format=json"
     start = time.monotonic()
-    try:
-        req = urllib.request.Request(probe_url, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            elapsed_ms = int((time.monotonic() - start) * 1000)
-            if resp.status != 200:
-                return ProbeResult(reachable=False, engines_degraded=False,
-                                   url=url, latency_ms=elapsed_ms)
-            body = resp.read()
-    except Exception:
-        elapsed_ms = int((time.monotonic() - start) * 1000)
+    body: bytes | None = None
+    last_exc: Exception | None = None
+
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(probe_url, method="GET")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if resp.status != 200:
+                    elapsed_ms = int((time.monotonic() - start) * 1000)
+                    log.debug("probe_searxng %s -> HTTP %s", url, resp.status)
+                    return ProbeResult(reachable=False, engines_degraded=False,
+                                       url=url, latency_ms=elapsed_ms)
+                body = resp.read()
+                break
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries:
+                log.debug("probe_searxng attempt %d failed (%s), retrying", attempt + 1, exc)
+                continue
+
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+
+    if body is None:
+        log.debug("probe_searxng %s unreachable after %d attempt(s): %s",
+                  url, retries + 1, last_exc)
         return ProbeResult(reachable=False, engines_degraded=False,
                            url=url, latency_ms=elapsed_ms)
 
@@ -163,7 +193,23 @@ def probe_searxng(url: str, timeout: int = 3) -> ProbeResult:
         return ProbeResult(reachable=False, engines_degraded=False,
                            url=url, latency_ms=elapsed_ms)
 
-    engines_degraded = len(data.get("results", [])) == 0
+    results = data.get("results", []) or []
+    # SearXNG returns an "engines" entry per result and a top-level
+    # "answers"/"unresponsive_engines"/"number_of_results" depending on
+    # version. We treat the backend as degraded only when:
+    #   - zero results AND
+    #   - either no engines reported at all, OR all configured engines
+    #     are listed as unresponsive.
+    engines_seen: set[str] = set()
+    for r in results:
+        for e in r.get("engines", []) or []:
+            if isinstance(e, str):
+                engines_seen.add(e)
+    unresponsive = data.get("unresponsive_engines") or []
+    engines_degraded = (
+        len(results) == 0
+        and (len(engines_seen) == 0 or len(unresponsive) > 0)
+    )
     return ProbeResult(reachable=True, engines_degraded=engines_degraded,
                        url=url, latency_ms=elapsed_ms)
 
