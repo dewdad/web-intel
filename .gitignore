@@ -28,3 +28,7 @@ raw/
 # macOS AppleDouble resource forks (from cloud sync)
 ._*
 .DS_Store
+
+# oh-my-openagent state (keep plans tracked)
+.omo/*
+!.omo/plans/
