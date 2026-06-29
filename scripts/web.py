@@ -687,46 +687,114 @@ def cmd_doctor(args: argparse.Namespace) -> None:
                 }
             )
 
-    # 4. Docker available
-    docker_ok = shutil.which("docker") is not None
-    checks.append({
-        "check": "docker",
-        "status": "ok" if docker_ok else "missing",
-        "hint": "" if docker_ok else "Install Docker: https://docs.docker.com/get-docker/",
-    })
-
-    # 5–6. SearXNG container + API (via _docker module)
-    from _docker import discover_container, probe_searxng
+    # 4. Docker available — only required when actually using the Docker backend.
+    from _docker import discover_container, probe_searxng, _current_mode
     from _config import SEARXNG_URL
+    from _searxng_public import is_public_url
 
-    searxng_info = discover_container("wrs-searxng") if docker_ok else None
+    searxng_mode = _current_mode()
+    env_url = os.environ.get("SEARXNG_URL", SEARXNG_URL)
+    using_public = searxng_mode == "public" or (searxng_mode == "auto" and is_public_url(env_url))
+    using_disabled = searxng_mode == "disabled"
+
+    docker_ok = shutil.which("docker") is not None
+    if using_public or using_disabled:
+        checks.append({
+            "check": "docker",
+            "status": "ok" if docker_ok else "skip",
+            "detail": f"not required: SEARXNG_MODE={searxng_mode}",
+        })
+    else:
+        checks.append({
+            "check": "docker",
+            "status": "ok" if docker_ok else "missing",
+            "hint": "" if docker_ok else (
+                "Install Docker: https://docs.docker.com/get-docker/  "
+                "OR run `setup --searxng-public` to skip Docker entirely."
+            ),
+        })
+
+    # 5–6. SearXNG backend health.
+    #      For public/auto-with-public-URL we probe SEARXNG_URL directly.
+    #      For docker/auto-with-loopback-URL we discover the wrs-searxng container.
+    searxng_info = (
+        discover_container("wrs-searxng")
+        if (docker_ok and not using_public and not using_disabled)
+        else None
+    )
     searxng_running = searxng_info is not None and searxng_info.status == "running"
 
-    checks.append({
-        "check": "searxng_docker",
-        "status": "ok" if searxng_running else "not_running",
-        "hint": "" if searxng_running
-                else f"docker compose -f {_SKILL_DIR}/docker/docker-compose.searxng.yml up -d",
-    })
+    if using_disabled:
+        checks.append({
+            "check": "searxng_docker",
+            "status": "skip",
+            "detail": "SEARXNG_MODE=disabled — using Brave/ddgs directly",
+        })
+        searxng_probe = None
+    elif using_public:
+        checks.append({
+            "check": "searxng_docker",
+            "status": "ok",
+            "mode": "public",
+            "detail": env_url,
+        })
+        searxng_probe = probe_searxng(env_url)
+    else:
+        checks.append({
+            "check": "searxng_docker",
+            "status": "ok" if searxng_running else "not_running",
+            "mode": "docker",
+            "hint": "" if searxng_running else (
+                f"docker compose -f {_SKILL_DIR}/docker/docker-compose.searxng.yml up -d  "
+                f"OR: web-intel setup --searxng-public  (skip Docker, use a community instance)"
+            ),
+        })
+        probe_url = (
+            f"http://127.0.0.1:{searxng_info.host_port}"
+            if searxng_running and searxng_info.host_port
+            else env_url
+        )
+        searxng_probe = probe_searxng(probe_url) if searxng_running else None
 
-    probe_url = (
-        f"http://127.0.0.1:{searxng_info.host_port}"
-        if searxng_running and searxng_info.host_port
-        else os.environ.get("SEARXNG_URL", SEARXNG_URL)
-    )
-    searxng_probe = probe_searxng(probe_url) if searxng_running else None
+    if using_disabled:
+        api_status = "skip"
+    elif using_public:
+        api_status = "ok" if (searxng_probe and searxng_probe.reachable) else "fail"
+    elif searxng_probe and searxng_probe.reachable:
+        api_status = "ok"
+    elif not searxng_running:
+        api_status = "skip"
+    else:
+        api_status = "fail"
+
+    api_hint = ""
+    if api_status == "fail":
+        if using_public:
+            api_hint = (
+                "Public instance is unreachable or has format=json disabled. "
+                "Try `setup --searxng-public` (no URL) to auto-pick another."
+            )
+        else:
+            api_hint = "Ensure 'json' is in search.formats in docker/searxng/settings.yml"
 
     checks.append({
         "check": "searxng_api",
-        "status": "ok" if (searxng_probe and searxng_probe.reachable) else ("skip" if not searxng_running else "fail"),
-        "hint": "" if (searxng_probe and searxng_probe.reachable)
-                else "Ensure 'json' is in search.formats in docker/searxng/settings.yml",
+        "status": api_status,
+        "hint": api_hint,
     })
 
     engines_degraded = searxng_probe.engines_degraded if searxng_probe else False
+    if using_disabled:
+        engines_status = "skip"
+    elif engines_degraded:
+        engines_status = "degraded"
+    elif searxng_probe and searxng_probe.reachable:
+        engines_status = "ok"
+    else:
+        engines_status = "skip"
     checks.append({
         "check": "searxng_engines",
-        "status": "degraded" if engines_degraded else ("ok" if (searxng_probe and searxng_probe.reachable) else "skip"),
+        "status": engines_status,
         "hint": "Upstream engines rate-limited; will auto-fallback to Brave/ddgs" if engines_degraded else "",
     })
 
@@ -924,8 +992,12 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         }
     )
 
-    # Summary
-    all_ok = all(c["status"] == "ok" for c in checks)
+    # Summary.
+    # ``skip`` and ``optional`` are not failures — they just indicate a check
+    # that doesn't apply to the current configuration (e.g. Docker is "skip"
+    # when SEARXNG_MODE=public). Treat them as non-blocking.
+    non_blocking = {"ok", "skip", "optional"}
+    all_ok = all(c["status"] in non_blocking for c in checks)
     ready_tiers = []
     core_deps_ok = all(
         c["status"] == "ok"
@@ -947,18 +1019,22 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     elif crawl4ai_browser_ok and core_deps_ok:
         ready_tiers.append("crawl")
 
-    search_backend = (
-        "searxng" if searxng_api_ok
-        else "brave" if brave_key
-        else "ddgs" if ddgs_ok
-        else "none"
-    )
+    if searxng_api_ok:
+        search_backend = "searxng-public" if using_public else "searxng"
+    elif brave_key:
+        search_backend = "brave"
+    elif ddgs_ok:
+        search_backend = "ddgs"
+    else:
+        search_backend = "none"
 
     emit(
         {
             "status": "ok" if all_ok else "partial",
             "command": "doctor",
             "skill_dir": str(_SKILL_DIR),
+            "searxng_mode": searxng_mode,
+            "searxng_url": env_url,
             "search_backend": search_backend,
             "ready_commands": ready_tiers,
             "checks": [{k: v for k, v in c.items() if v} for c in checks],
@@ -1009,25 +1085,115 @@ def cmd_setup(args: argparse.Namespace) -> None:
             }
         )
 
-    # 3. Start SearXNG if Docker available and not running
+    # 3. Configure SearXNG backend.
+    #    Order of precedence:
+    #      a. --searxng-public [URL]  → write SEARXNG_MODE=public + URL to .env (no Docker)
+    #      b. --recreate-searxng      → tear down + recreate Docker container
+    #      c. SEARXNG_MODE=public     → already configured for a public instance, do nothing
+    #      d. docker available        → ensure local container is running (legacy default)
+    #      e. otherwise               → skip with hint
     from _docker import ensure_searxng_running, recreate_searxng
 
-    if getattr(args, "recreate_searxng", False):
+    public_arg = getattr(args, "searxng_public", None)
+    public_requested = public_arg is not None  # action="store" with nargs="?" gives None when absent
+
+    if public_requested:
+        from _searxng_public import (
+            PUBLIC_INSTANCES,
+            pick_public_instance,
+            write_searxng_url_to_env,
+        )
+
+        # Empty string sentinel = "user passed the flag with no value" → auto-pick.
+        chosen_url: str | None = public_arg.strip() if public_arg else None
+
+        if not chosen_url:
+            pick = pick_public_instance()
+            if pick.url is None:
+                steps.append({
+                    "step": "searxng",
+                    "status": "failed",
+                    "mode": "public",
+                    "error": "no public instance answered with JSON results",
+                    "tried": pick.tried,
+                    "hint": (
+                        "Pick one manually with --searxng-public <URL>, or "
+                        "fall back to Docker (`setup`) / Brave / ddgs at search time."
+                    ),
+                })
+            else:
+                write_searxng_url_to_env(_SKILL_DIR / ".env", pick.url)
+                steps.append({
+                    "step": "searxng",
+                    "status": "configured",
+                    "mode": "public",
+                    "url": pick.url,
+                    "tried": pick.tried,
+                })
+        else:
+            # User passed an explicit URL — probe it and fail loudly if it doesn't
+            # actually serve JSON, rather than silently writing a broken setting.
+            from _docker import probe_searxng
+
+            probe = probe_searxng(chosen_url)
+            if not probe.reachable:
+                steps.append({
+                    "step": "searxng",
+                    "status": "failed",
+                    "mode": "public",
+                    "url": chosen_url,
+                    "error": "probe failed (instance unreachable or JSON format disabled)",
+                    "hint": "Most public instances disable format=json. Try another from --searxng-public with no URL.",
+                })
+            elif probe.engines_degraded:
+                # Still write it — the user asked for this URL — but warn.
+                write_searxng_url_to_env(_SKILL_DIR / ".env", chosen_url)
+                steps.append({
+                    "step": "searxng",
+                    "status": "configured",
+                    "mode": "public",
+                    "url": chosen_url,
+                    "warning": "instance answered but engines look degraded; expect Brave/ddgs fallback to kick in",
+                })
+            else:
+                write_searxng_url_to_env(_SKILL_DIR / ".env", chosen_url)
+                steps.append({
+                    "step": "searxng",
+                    "status": "configured",
+                    "mode": "public",
+                    "url": chosen_url,
+                })
+    elif getattr(args, "recreate_searxng", False):
         result = recreate_searxng(_SKILL_DIR)
         if result.error:
             steps.append({"step": "searxng", "status": result.action, "error": result.error})
         else:
             steps.append({"step": "searxng", "status": "recreated"})
+    elif os.environ.get("SEARXNG_MODE", "auto").lower() == "public":
+        # User has already opted into public mode in .env; honour it without touching Docker.
+        steps.append({
+            "step": "searxng",
+            "status": "skip",
+            "mode": "public",
+            "hint": f"SEARXNG_MODE=public — using {os.environ.get('SEARXNG_URL', '')}",
+        })
     elif shutil.which("docker"):
         result = ensure_searxng_running(_SKILL_DIR)
-        step = {"step": "searxng", "status": result.action}
+        step = {"step": "searxng", "status": result.action, "mode": "docker"}
         if result.stale_mount:
             step["warning"] = result.stale_mount_hint
         if result.error:
             step["error"] = result.error
         steps.append(step)
     else:
-        steps.append({"step": "searxng", "status": "skip", "hint": "Docker not found"})
+        steps.append({
+            "step": "searxng",
+            "status": "skip",
+            "hint": (
+                "Docker not found. Either install Docker, or run "
+                "`setup --searxng-public` to use a community SearXNG instance."
+            ),
+        })
 
     # 4. Start Crawl4AI Docker container (only if tier=all)
     if tier == "all" and shutil.which("docker"):
@@ -1337,6 +1503,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Tear down and recreate the wrs-searxng container (fixes stale volume mounts).",
+    )
+    p_setup.add_argument(
+        "--searxng-public",
+        dest="searxng_public",
+        nargs="?",
+        const="",  # flag passed without value → auto-pick from PUBLIC_INSTANCES
+        default=None,
+        metavar="URL",
+        help=(
+            "Use a public SearXNG instance instead of running Docker. "
+            "Pass --searxng-public alone to auto-pick from a curated list, "
+            "or --searxng-public https://searx.example.org to pin one. "
+            "Writes SEARXNG_URL and SEARXNG_MODE=public to .env."
+        ),
     )
     p_setup.add_argument("--pretty", action="store_true")
     p_setup.set_defaults(func=cmd_setup)

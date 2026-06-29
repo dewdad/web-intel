@@ -73,6 +73,12 @@ class ProbeResult:
     engines_degraded: bool
     url: str
     latency_ms: int = 0
+    # ``http_status`` and ``error_kind`` are populated on failure so that
+    # callers (notably ``_searxng_public.pick_public_instance``) can give
+    # users a precise reason string like ``http_403`` or ``dns_fail``
+    # instead of an opaque ``unreachable_or_no_json``.
+    http_status: int = 0
+    error_kind: str = ""
 
 
 @dataclass
@@ -155,6 +161,7 @@ def probe_searxng(url: str, timeout: int = 7, retries: int = 1) -> ProbeResult:
         — not just an empty ``results[]``.
     """
     import time
+    import urllib.error
     import urllib.request
 
     probe_url = f"{url.rstrip('/')}/search?q=wikipedia&format=json"
@@ -162,17 +169,40 @@ def probe_searxng(url: str, timeout: int = 7, retries: int = 1) -> ProbeResult:
     body: bytes | None = None
     last_exc: Exception | None = None
 
+    # Public SearXNG instances (and CDN front-ends) routinely 403 requests
+    # that look like Python's default ``Python-urllib/3.x`` UA. A realistic
+    # browser UA + ``Accept`` is the bare minimum to be treated as a human.
+    # Local Docker doesn't care about UA either way, so this is harmless.
+    probe_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json,text/html;q=0.9",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    last_status = 0
     for attempt in range(retries + 1):
         try:
-            req = urllib.request.Request(probe_url, method="GET")
+            req = urllib.request.Request(probe_url, method="GET", headers=probe_headers)
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 if resp.status != 200:
                     elapsed_ms = int((time.monotonic() - start) * 1000)
                     log.debug("probe_searxng %s -> HTTP %s", url, resp.status)
-                    return ProbeResult(reachable=False, engines_degraded=False,
-                                       url=url, latency_ms=elapsed_ms)
+                    return ProbeResult(
+                        reachable=False, engines_degraded=False,
+                        url=url, latency_ms=elapsed_ms,
+                        http_status=resp.status, error_kind=f"http_{resp.status}",
+                    )
                 body = resp.read()
                 break
+        except urllib.error.HTTPError as exc:
+            last_exc = exc
+            last_status = exc.code
+            if attempt < retries:
+                log.debug("probe_searxng attempt %d failed (%s), retrying", attempt + 1, exc)
+                continue
         except Exception as exc:
             last_exc = exc
             if attempt < retries:
@@ -184,14 +214,32 @@ def probe_searxng(url: str, timeout: int = 7, retries: int = 1) -> ProbeResult:
     if body is None:
         log.debug("probe_searxng %s unreachable after %d attempt(s): %s",
                   url, retries + 1, last_exc)
-        return ProbeResult(reachable=False, engines_degraded=False,
-                           url=url, latency_ms=elapsed_ms)
+        if last_status:
+            error_kind = f"http_{last_status}"
+        elif last_exc is None:
+            error_kind = "unknown"
+        else:
+            name = type(last_exc).__name__.lower()
+            if "timeout" in name:
+                error_kind = "timeout"
+            elif "url" in name or "dns" in name or "gaierror" in name or "getaddrinfo" in str(last_exc).lower():
+                error_kind = "dns_or_connect_fail"
+            else:
+                error_kind = name
+        return ProbeResult(
+            reachable=False, engines_degraded=False,
+            url=url, latency_ms=elapsed_ms,
+            http_status=last_status, error_kind=error_kind,
+        )
 
     try:
         data = json.loads(body)
     except (json.JSONDecodeError, ValueError):
-        return ProbeResult(reachable=False, engines_degraded=False,
-                           url=url, latency_ms=elapsed_ms)
+        return ProbeResult(
+            reachable=False, engines_degraded=False,
+            url=url, latency_ms=elapsed_ms,
+            error_kind="non_json_response",
+        )
 
     results = data.get("results", []) or []
     # SearXNG returns an "engines" entry per result and a top-level
@@ -214,38 +262,83 @@ def probe_searxng(url: str, timeout: int = 7, retries: int = 1) -> ProbeResult:
                        url=url, latency_ms=elapsed_ms)
 
 
+def _current_mode() -> str:
+    """Resolve SEARXNG_MODE at call time so .env edits / setup steps take effect.
+
+    Falls back to "auto" if the env var is missing or unrecognised.
+    """
+    import os as _os
+    raw = _os.environ.get("SEARXNG_MODE", "auto").strip().lower()
+    return raw if raw in {"auto", "public", "docker", "disabled"} else "auto"
+
+
 def get_searxng_url() -> ResolvedBackend:
+    """Resolve the active SearXNG endpoint, dispatching on SEARXNG_MODE.
+
+    The historic behaviour (probe env URL → fall back to Docker discovery)
+    is preserved as the ``auto`` mode. ``public`` skips Docker entirely
+    so users running against a community instance don't get spurious
+    "Docker not found" warnings.
+    """
     import os
     from _config import SEARXNG_URL
 
     env_url = os.environ.get("SEARXNG_URL", SEARXNG_URL)
+    mode = _current_mode()
 
+    if mode == "disabled":
+        # Caller will see reachable=False and route to Brave/ddgs.
+        return ResolvedBackend(url=env_url, engines_degraded=False)
+
+    if mode == "public":
+        # Honour exactly what the user configured. No Docker poking.
+        env_probe = probe_searxng(env_url)
+        return ResolvedBackend(url=env_url, engines_degraded=env_probe.engines_degraded)
+
+    # mode == "auto" or "docker"
     env_probe = probe_searxng(env_url)
     if env_probe.reachable:
         return ResolvedBackend(url=env_url, engines_degraded=env_probe.engines_degraded)
 
-    info = discover_container("wrs-searxng")
-    if info is None or info.host_port == 0:
-        return ResolvedBackend(url=env_url, engines_degraded=False)
+    if mode == "docker" or _looks_like_loopback(env_url):
+        info = discover_container("wrs-searxng")
+        if info is None or info.host_port == 0:
+            return ResolvedBackend(url=env_url, engines_degraded=False)
 
-    if info.status != "running":
-        log.debug("wrs-searxng container exists but status=%s", info.status)
-        return ResolvedBackend(url=env_url, engines_degraded=False)
+        if info.status != "running":
+            log.debug("wrs-searxng container exists but status=%s", info.status)
+            return ResolvedBackend(url=env_url, engines_degraded=False)
 
-    discovered_url = f"http://127.0.0.1:{info.host_port}"
-    docker_probe = probe_searxng(discovered_url)
+        discovered_url = f"http://127.0.0.1:{info.host_port}"
+        docker_probe = probe_searxng(discovered_url)
 
-    if docker_probe.reachable:
-        if discovered_url != env_url:
-            log.info(
-                "SearXNG running on port %d, overriding SEARXNG_URL (was %s)",
-                info.host_port, env_url,
-            )
-            os.environ["SEARXNG_URL"] = discovered_url
-        return ResolvedBackend(url=discovered_url, engines_degraded=docker_probe.engines_degraded)
+        if docker_probe.reachable:
+            if discovered_url != env_url:
+                log.info(
+                    "SearXNG running on port %d, overriding SEARXNG_URL (was %s)",
+                    info.host_port, env_url,
+                )
+                os.environ["SEARXNG_URL"] = discovered_url
+            return ResolvedBackend(url=discovered_url, engines_degraded=docker_probe.engines_degraded)
 
-    log.debug("wrs-searxng container running but probe failed on port %d", info.host_port)
+        log.debug("wrs-searxng container running but probe failed on port %d", info.host_port)
+
     return ResolvedBackend(url=env_url, engines_degraded=False)
+
+
+def _looks_like_loopback(url: str) -> bool:
+    """Cheap host check used to decide whether Docker discovery is worth trying.
+
+    In ``auto`` mode we only fall back to Docker discovery when the configured
+    URL points at the loopback interface — discovering a local container can't
+    help if the user has explicitly pointed SEARXNG_URL at a remote host.
+    """
+    try:
+        from _searxng_public import is_public_url
+        return not is_public_url(url)
+    except Exception:
+        # Conservative: if helper import fails, behave like the old code path.
+        return True
 
 
 def _compose_env(skill_dir: "Path", port: int | None = None) -> dict[str, str]:

@@ -45,6 +45,15 @@ _load_dotenv()
 SEARXNG_URL: str = os.environ.get("SEARXNG_URL", "http://127.0.0.1:9871")
 SEARXNG_API_KEY: Optional[str] = os.environ.get("SEARXNG_API_KEY")
 
+# How web-intel resolves the SearXNG backend.
+#   "auto"     — probe SEARXNG_URL; if it answers, use it. Otherwise try to
+#                discover a Docker container named ``wrs-searxng``. Default.
+#   "public"   — treat SEARXNG_URL as a remote/public instance. Skip Docker
+#                discovery entirely. Doctor stops nagging about Docker.
+#   "docker"   — only use the local Docker container (current behaviour).
+#   "disabled" — never use SearXNG; go straight to Brave/ddgs fallback.
+SEARXNG_MODE: str = os.environ.get("SEARXNG_MODE", "auto").lower()
+
 CRAWL4AI_DOCKER_URL: str = os.environ.get(
     "CRAWL4AI_DOCKER_URL", "http://localhost:11235"
 )
