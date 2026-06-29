@@ -40,14 +40,32 @@ Python deps auto-install on first run. No Docker needed.
 $SKILL_DIR/bin/web-intel fetch "https://example.com" --pretty
 ```
 
-**Tier 2 — Docker preferred, but not required:** `search`
+**Tier 2 — Three SearXNG paths, pick whichever fits your environment:** `search`
 
 ```bash
-$SKILL_DIR/bin/web-intel setup --pretty           # auto-starts SearXNG
+# (a) Local Docker — full control, no rate limits, requires Docker.
+$SKILL_DIR/bin/web-intel setup --pretty
+
+# (b) Public community instance — zero infra. Rate-limited and may block bots,
+#     but instantly available even on machines without Docker.
+$SKILL_DIR/bin/web-intel setup --searxng-public --pretty               # auto-pick a working instance
+$SKILL_DIR/bin/web-intel setup --searxng-public https://searx.be --pretty   # pin one
+
+# (c) Bring-your-own — point SEARXNG_URL at any instance you already run
+#     (native pip install + granian/uwsgi, k8s deployment, anything).
+echo "SEARXNG_URL=https://searxng.internal.example" >> $SKILL_DIR/.env
+echo "SEARXNG_MODE=public" >> $SKILL_DIR/.env
+
 $SKILL_DIR/bin/web-intel search "query" --pretty
 ```
 
-Search fallback chain: **SearXNG → Brave Search API (if BRAVE_API_KEY set) → [ddgs](https://github.com/deedy5/ddgs) (zero-config)**. Search works even without Docker via ddgs.
+`SEARXNG_MODE` controls dispatch:
+- `auto` (default) — probe `SEARXNG_URL`, then try Docker (`wrs-searxng`) only if the URL is loopback and unreachable.
+- `public` — `SEARXNG_URL` is remote. Docker is never poked; doctor stops nagging.
+- `docker` — strict legacy mode: only the local container.
+- `disabled` — skip SearXNG entirely, go straight to Brave/ddgs.
+
+Search fallback chain (regardless of mode): **SearXNG → Brave Search API (if `BRAVE_API_KEY` set) → [ddgs](https://github.com/deedy5/ddgs) (zero-config)**. Search works even without Docker and even when every public instance has rate-limited you.
 
 **Tier 3 — Needs Crawl4AI browser:** `crawl`, `fetch` fallback
 
@@ -60,11 +78,13 @@ $SKILL_DIR/bin/web-intel crawl "https://spa.example.com" --pretty
 
 ```bash
 $SKILL_DIR/bin/web-intel doctor --pretty   # check all deps, services, and search backends
-$SKILL_DIR/bin/web-intel setup --pretty    # auto-fix: install deps, start SearXNG, create .env
+$SKILL_DIR/bin/web-intel setup --pretty    # auto-fix: install deps, start SearXNG (Docker), create .env
+$SKILL_DIR/bin/web-intel setup --searxng-public --pretty       # configure a community instance, no Docker
+$SKILL_DIR/bin/web-intel setup --searxng-public https://searx.be --pretty   # pin a specific instance
 $SKILL_DIR/bin/web-intel setup --clear-cache --pretty  # clear dep-stamp cache and page-diff cache
 ```
 
-`doctor` returns JSON with `ready_commands`, `search_backend` (which backend will be used), and per-dependency `checks[]`.
+`doctor` returns JSON with `ready_commands`, `searxng_mode` (`auto`/`public`/`docker`/`disabled`), `searxng_url`, `search_backend` (`searxng` / `searxng-public` / `brave` / `ddgs` / `none`), and per-dependency `checks[]`. Checks with status `skip` or `optional` do not flip the overall status to `partial`.
 
 ## Commands
 
